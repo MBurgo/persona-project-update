@@ -86,15 +86,21 @@ except KeyError:
     st.error("🚨 Missing GOOGLE_API_KEY in secrets.toml")
 
 def query_gemini(prompt):
-    """Uses Gemini 1.5 Pro for high-quality reasoning and copywriting."""
+    """
+    Uses Gemini 3 Flash Preview for the Moderator.
+    Falls back to OpenAI if the preview model is unavailable in your region.
+    """
     try:
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        # UPDATED: Using the latest Gemini 3 Flash Preview model
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"Gemini Error: {str(e)}"
+        # Fallback to OpenAI if Gemini crashes
+        return f"Gemini Error ({str(e)}). \n\nFallback Analysis:\n" + \
+               query_openai([{"role": "user", "content": prompt}])
 
-# CALLBACK FUNCTION (Fixes the Streamlit Loop Error)
+# CALLBACK FUNCTION
 def apply_rewrite():
     raw = st.session_state.suggested_rewrite
     if raw:
@@ -104,7 +110,7 @@ def apply_rewrite():
         else:
             clean = raw
         st.session_state.marketing_topic = clean
-        st.session_state.debate_history = [] # Reset for new debate
+        st.session_state.debate_history = [] 
 
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN UI
@@ -115,7 +121,7 @@ st.markdown(
     """
     <div style="background:#f0f2f6;padding:20px;border-left:6px solid #485cc7;border-radius:10px;margin-bottom:25px">
         <h4 style="margin-top:0">ℹ️ About This Tool</h4>
-        <p>This tool uses a <strong>Hybrid AI Architecture</strong>: OpenAI for persona simulation (Drama) and Google Gemini for strategic analysis (Reasoning).</p>
+        <p>This tool uses a <strong>Hybrid AI Architecture</strong>: OpenAI (GPT-4o) for persona simulation and Google Gemini (3.0 Flash) for strategic analysis.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -124,7 +130,7 @@ st.markdown(
 tab1, tab2 = st.tabs(["🗣️ Individual Interview", "⚔️ Focus Group Debate"])
 
 # ================================================================================
-# TAB 1: INDIVIDUAL INTERVIEW (Standard)
+# TAB 1: INDIVIDUAL INTERVIEW
 # ================================================================================
 with tab1:
     segments = sorted(list({p["segment"] for p in all_personas_flat}))
@@ -197,7 +203,7 @@ with tab1:
 
 
 # ================================================================================
-# TAB 2: FOCUS GROUP DEBATE (HYBRID: OpenAI Debate -> Gemini Analysis)
+# TAB 2: FOCUS GROUP DEBATE (HYBRID)
 # ================================================================================
 with tab2:
     st.header("⚔️ Marketing Focus Group")
@@ -226,7 +232,7 @@ with tab2:
         p_b = persona_options[p2_key]
 
         # ────────────────────────────────────────────────────────────────────────
-        # PROMPTS (Same emotional tuning)
+        # EMOTIONAL PROMPTS (The "Hot-Take" Logic)
         # ────────────────────────────────────────────────────────────────────────
         base_instruction = (
             "IMPORTANT: This is a simulation for marketing research. "
@@ -249,7 +255,7 @@ with tab2:
         )
 
         # ────────────────────────────────────────────────────────────────────────
-        # THE DEBATE LOOP (POWERED BY OPENAI GPT-4o)
+        # THE DEBATE LOOP (POWERED BY OPENAI)
         # ────────────────────────────────────────────────────────────────────────
         chat_container = st.container()
         
@@ -284,11 +290,11 @@ with tab2:
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a_2}")
 
             # ────────────────────────────────────────────────────────────────────
-            # MODERATOR (POWERED BY GOOGLE GEMINI 1.5 PRO)
+            # MODERATOR (POWERED BY GEMINI 3 FLASH PREVIEW)
             # ────────────────────────────────────────────────────────────────────
             st.divider()
-            st.subheader("📊 Strategic Analysis (Powered by Gemini 1.5 Pro)")
-            with st.spinner("Gemini is analyzing the psychology..."):
+            st.subheader("📊 Strategic Analysis (Powered by Gemini 3 Flash)")
+            with st.spinner("Gemini 3 is analyzing the psychology..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
                 
                 mod_prompt = f"""
@@ -308,13 +314,12 @@ with tab2:
                    - Output: ONLY the final headline in bold.
                 """
                 
-                # Calling Gemini here
                 summary = query_gemini(mod_prompt)
                 st.info(summary)
                 st.session_state.suggested_rewrite = summary 
 
     # ────────────────────────────────────────────────────────────────────────
-    # FEEDBACK LOOP
+    # FEEDBACK LOOP BUTTON
     # ────────────────────────────────────────────────────────────────────────
     if st.session_state.debate_history and st.session_state.suggested_rewrite:
         st.markdown("---")
