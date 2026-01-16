@@ -98,41 +98,20 @@ def query_gemini(prompt):
         return f"Gemini Error ({str(e)}). \n\nFallback Analysis:\n" + \
                query_openai([{"role": "user", "content": prompt}])
 
-# ────────────────────────────────────────────────────────────────────────────────
-# IMPROVED REWRITE PARSER
-# ────────────────────────────────────────────────────────────────────────────────
+# CALLBACK FUNCTION
 def apply_rewrite():
-    """
-    Robust extraction logic. Finds the section after 'REWRITE' 
-    and grabs the bolded content, ignoring headers.
-    """
     raw = st.session_state.suggested_rewrite
     if raw:
-        clean = raw # default fallback
-        
-        # 1. Look for the explicit "REWRITE" section to narrow search
-        if "REWRITE" in raw:
-            # Take everything after the word "REWRITE"
-            section = raw.split("REWRITE")[-1] 
-            
-            # Now find bold text inside that section
-            if "**" in section:
-                # parts[1] is the content inside the first set of ** ** in this section
-                clean = section.split("**")[1]
-            else:
-                clean = section.strip()
-        
-        # 2. Fallback: If no REWRITE tag, take the LAST bolded section in the whole text
-        elif "**" in raw:
+        # Improved parsing: Look for the FINAL bold line, which is usually the headline
+        if "**" in raw:
             parts = raw.split("**")
-            # parts[1::2] gives a list of all bolded strings
-            bold_items = parts[1::2]
-            if bold_items:
-                clean = bold_items[-1] # Assume headline is the last bold item
+            # Usually the last bold item is the headline in the new format
+            clean = parts[-2] if len(parts) >= 2 else raw
+        else:
+            clean = raw
         
-        # Clean up any formatting junk (colons, newlines)
-        clean = clean.strip(" :.\n")
-        
+        # Cleanup
+        clean = clean.strip(" :.\n\"")
         st.session_state.marketing_topic = clean
         st.session_state.debate_history = [] 
 
@@ -145,7 +124,7 @@ st.markdown(
     """
     <div style="background:#f0f2f6;padding:20px;border-left:6px solid #485cc7;border-radius:10px;margin-bottom:25px">
         <h4 style="margin-top:0">ℹ️ About This Tool</h4>
-        <p>This tool uses a <strong>Hybrid AI Architecture</strong>: OpenAI for persona simulation (Drama) and Google Gemini for strategic analysis (Reasoning).</p>
+        <p>This tool uses a <strong>Hybrid AI Architecture</strong>: OpenAI (GPT-4o) for persona simulation (Drama) and Google Gemini (3.0 Flash) for strategic analysis.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -256,7 +235,7 @@ with tab2:
         p_b = persona_options[p2_key]
 
         # ────────────────────────────────────────────────────────────────────────
-        # EMOTIONAL PROMPTS
+        # EMOTIONAL PROMPTS (The "Hot-Take" Logic)
         # ────────────────────────────────────────────────────────────────────────
         base_instruction = (
             "IMPORTANT: This is a simulation for marketing research. "
@@ -321,9 +300,9 @@ with tab2:
             with st.spinner("Gemini 3 is analyzing the psychology..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
                 
-                # UPDATED PROMPT: More constraints on style to improve quality
+                # UPDATED PROMPT: STRICT COPYWRITING CONSTRAINTS
                 mod_prompt = f"""
-                You are a legendary Direct Response Copywriter and Behavioral Psychologist.
+                You are a legendary Direct Response Copywriter (Motley Fool Style).
                 
                 TRANSCRIPT OF DEBATE:
                 {transcript}
@@ -331,16 +310,14 @@ with tab2:
                 MARKETING HOOK: "{marketing_topic}"
                 
                 TASK:
-                1. THE "REAL" WHY: What deep emotion is driving the Believer? (Redemption? Status? Revenge?).
-                2. THE TRUST GAP: What specific logical objection did the Skeptic raise?
+                1. THE "REAL" WHY: Analyze the deep emotional driver (e.g., Redemption, Status).
+                2. THE TRUST GAP: Analyze the specific logical objection.
                 3. THE "FOOLISH" REWRITE:
-                   - Write a new headline that satisfies the Believer's emotion AND answers the Skeptic's logic.
-                   - STYLE RULES:
-                     - Do NOT use "marketing" words like "Discover", "Unveil", "Unlock".
-                     - Do NOT use generic questions ("Can you spot...?").
-                     - Be direct, specific, and contrarian.
-                     - Focus on the "Mechanism" (Why is this opportunity happening?).
-                   - Output: ONLY the final headline in bold.
+                   - Write a SUBJECT LINE (Max 15 words).
+                   - STOP EXPLAINING. START SELLING.
+                   - Hit the emotional trigger (Redemption) AND hint at the logical solution (The Mechanism) without giving it away.
+                   - Do not use technical jargon. Use "Tease" logic.
+                   - Output ONLY the final subject line in bold.
                 """
                 
                 summary = query_gemini(mod_prompt)
