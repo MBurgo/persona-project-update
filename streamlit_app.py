@@ -106,16 +106,18 @@ def apply_rewrite():
     raw = st.session_state.suggested_rewrite
     if raw:
         clean = raw
-        # Look for the "FOOLISH REWRITE" section or similar marker
+        # Intelligent Parsing: Look for the specific section headers
+        # We want everything AFTER the "3. THE FOOLISH REWRITE" header.
         if "3. THE" in raw:
-            # Grab everything after point 3
             parts = raw.split("3. THE")
             if len(parts) > 1:
-                # Remove the label line itself (e.g. "FOOLISH REWRITE:")
+                # Remove the header line itself
                 clean = parts[1].split("\n", 1)[-1].strip()
         elif "REWRITE:" in raw:
             clean = raw.split("REWRITE:")[-1].strip()
             
+        # Clean up Markdown bolding if it captured the label "**Subject:**"
+        # We actually want to keep the label so the Debaters know which part is which.
         st.session_state.marketing_topic = clean
         st.session_state.debate_history = [] 
 
@@ -305,7 +307,7 @@ with tab2:
             with st.spinner("Gemini 3 is analyzing the psychology..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
                 
-                # UPDATED PROMPT: ENCOURAGES THE "FULL HOOK"
+                # UPDATED PROMPT: REQUESTS SUBJECT LINE + KILLER OPENING
                 mod_prompt = f"""
                 You are a legendary Direct Response Copywriter (Motley Fool Style).
                 
