@@ -31,6 +31,7 @@ if "chat_history" not in st.session_state:
 if "debate_history" not in st.session_state:
     st.session_state.debate_history = []
 if "marketing_topic" not in st.session_state:
+    # Set default value
     st.session_state.marketing_topic = "Subject: 3 AI Stocks better than Nvidia. Urgent Buy Alert!"
 if "suggested_rewrite" not in st.session_state:
     st.session_state.suggested_rewrite = ""
@@ -65,7 +66,7 @@ def load_and_patch_data():
 persona_data_raw, all_personas_flat = load_and_patch_data()
 
 # ────────────────────────────────────────────────────────────────────────────────
-# OPENAI CLIENT
+# OPENAI CLIENT & HELPERS
 # ────────────────────────────────────────────────────────────────────────────────
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
@@ -75,6 +76,22 @@ def query_llm(messages, model="gpt-4o"):
         return completion.choices[0].message.content.strip()
     except Exception as e:
         return f"Error: {str(e)}"
+
+# CALLBACK FUNCTION TO FIX STREAMLIT ERROR
+def apply_rewrite():
+    """Updates the marketing topic in session state before the re-run."""
+    raw = st.session_state.suggested_rewrite
+    if raw:
+        # Try to extract content between double asterisks (bold)
+        if "**" in raw:
+            parts = raw.split("**")
+            # Usually the rewrite is the second part (index 1) or last part
+            clean = parts[1] if len(parts) > 1 else raw
+        else:
+            clean = raw
+        st.session_state.marketing_topic = clean
+        # Clear the history so the new debate starts fresh
+        st.session_state.debate_history = []
 
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN UI
@@ -167,7 +184,7 @@ with tab1:
 
 
 # ================================================================================
-# TAB 2: FOCUS GROUP DEBATE (With "Deep Psychology" Update)
+# TAB 2: FOCUS GROUP DEBATE
 # ================================================================================
 with tab2:
     st.header("⚔️ Marketing Focus Group")
@@ -183,7 +200,7 @@ with tab2:
     with c3:
         st.info("🔥 Mode: Adversarial Stress Test")
 
-    # Text Area bound to session state so we can update it programmatically
+    # Text Area bound to session state 'marketing_topic'
     marketing_topic = st.text_area(
         "Marketing Headline / Copy", 
         key="marketing_topic"
@@ -262,10 +279,9 @@ with tab2:
             with st.spinner("Analyzing the deep psychology..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
                 
-                # UPDATED PROMPT: Focused on Psychology & "Foolish" Tone
+                # UPDATED PROMPT: Added instruction to be specific rather than generic
                 mod_prompt = f"""
                 You are a world-class Direct Response Copywriter and Behavioral Psychologist. 
-                Do not just summarize the text. Analyze the subtext.
                 
                 TRANSCRIPT:
                 {transcript}
@@ -276,16 +292,16 @@ with tab2:
                 
                 1. THE "REAL" WHY (Psychology):
                 Ignore the surface excitement. What is the *actual* emotion driving the Believer? 
-                (Is it Redemption for past mistakes? Status? Greed? Revenge against the market?)
+                (Is it Redemption? Status? Greed? Revenge against the market?)
                 
                 2. THE TRUST GAP (Objection):
-                What specifically made the Skeptic bail? Was it a specific word (like "Urgent") or a logical hole (like "Why is this secret?")?
+                What specifically made the Skeptic bail? 
                 
                 3. THE "FOOLISH" REWRITE:
                 Rewrite the headline.
-                - RULES: Be punchy, contrarian, and conversational (Motley Fool style). 
-                - Do NOT be corporate or boring. 
-                - Address the "Real Why" while fixing the "Trust Gap".
+                - RULES: Be punchy and contrarian (Motley Fool style).
+                - Address the specific pain point (e.g. missing Nvidia) directly.
+                - Avoid generic questions like "Can you spot...". 
                 - Output ONLY the rewrite in bold for the final line.
                 """
                 
@@ -293,8 +309,6 @@ with tab2:
                                      {"role": "user", "content": mod_prompt}])
                 st.info(summary)
                 
-                # Extract the rewrite roughly (assuming the LLM follows instructions to bold it or put it at end)
-                # We save it to session state to allow the user to loop it.
                 st.session_state.suggested_rewrite = summary 
 
     # ────────────────────────────────────────────────────────────────────────
@@ -303,22 +317,9 @@ with tab2:
     if st.session_state.debate_history and st.session_state.suggested_rewrite:
         st.markdown("---")
         st.markdown("### 🔄 Iterate")
-        st.write("Want to test the Moderator's suggestion? Click below to load it into the input box and re-run the debate.")
+        st.write("Test the Moderator's suggestion?")
         
         col_a, col_b = st.columns([1, 4])
         with col_a:
-            if st.button("Test Rewrite"):
-                # Logic to parse the bold text or just take the whole summary? 
-                # For simplicity, we ask the user to copy-paste OR we can try to extract just the headline.
-                # Let's just update the box and let the user edit if needed.
-                
-                # Try to extract the bolded part if possible, otherwise paste full summary
-                new_topic = st.session_state.suggested_rewrite
-                if "**" in new_topic:
-                    # Simple extraction of bold text
-                    parts = new_topic.split("**")
-                    if len(parts) >= 2:
-                        new_topic = parts[1] # Take the content between first set of bolds
-                
-                st.session_state.marketing_topic = new_topic
-                st.rerun()
+            # FIX: Use on_click callback to update state safely
+            st.button("Test Rewrite", on_click=apply_rewrite)
