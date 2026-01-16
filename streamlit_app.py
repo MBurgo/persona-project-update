@@ -35,10 +35,20 @@ if "marketing_topic" not in st.session_state:
     st.session_state.marketing_topic = "Subject: 3 AI Stocks better than Nvidia. Urgent Buy Alert!"
 if "suggested_rewrite" not in st.session_state:
     st.session_state.suggested_rewrite = ""
+if "question_input" not in st.session_state:
+    st.session_state.question_input = ""
 
 # ────────────────────────────────────────────────────────────────────────────────
-# DATA LOADING
+# DATA LOADING & SEGMENT INFO
 # ────────────────────────────────────────────────────────────────────────────────
+segment_summaries = {
+    "Next Generation Investors (18–24 years)": "Tech‑native, socially‑conscious starters focused on building asset bases early.",
+    "Emerging Wealth Builders (25–34 years)": "Balancing house deposits, careers and investing; optimistic but wage‑squeezed.",
+    "Established Accumulators (35–49 years)": "Juggling family, mortgages and wealth growth; value efficiency and advice.",
+    "Pre‑Retirees (50–64 years)": "Capital‑preservers planning retirement income; keen super watchers.",
+    "Retirees (65+ years)": "Stability‑seekers prioritising income and low volatility.",
+}
+
 @st.cache_data
 def load_and_patch_data():
     with open("personas.json", "r", encoding="utf-8") as f:
@@ -51,6 +61,9 @@ def load_and_patch_data():
         p.setdefault("budget_adjustments_6m", [])
         p.setdefault("super_engagement", "Unknown")
         p.setdefault("property_via_super_interest", "No")
+        p.setdefault("income", 80000)
+        p.setdefault("goals", [])
+        p.setdefault("behavioural_traits", {"risk_tolerance": "Moderate"})
         return p
 
     flat_personas = []
@@ -88,7 +101,6 @@ except KeyError:
 def query_gemini(prompt):
     """
     Uses Gemini 3 Flash Preview for the Moderator.
-    Falls back to OpenAI if Gemini fails.
     """
     try:
         model = genai.GenerativeModel('gemini-3-flash-preview')
@@ -100,24 +112,16 @@ def query_gemini(prompt):
 
 # CALLBACK FUNCTION
 def apply_rewrite():
-    """
-    Extracts the full rewrite (Subject + Body) to feed back into the debate.
-    """
     raw = st.session_state.suggested_rewrite
     if raw:
         clean = raw
-        # Intelligent Parsing: Look for the specific section headers
-        # We want everything AFTER the "3. THE FOOLISH REWRITE" header.
         if "3. THE" in raw:
             parts = raw.split("3. THE")
             if len(parts) > 1:
-                # Remove the header line itself
                 clean = parts[1].split("\n", 1)[-1].strip()
         elif "REWRITE:" in raw:
             clean = raw.split("REWRITE:")[-1].strip()
-            
-        # Clean up Markdown bolding if it captured the label "**Subject:**"
-        # We actually want to keep the label so the Debaters know which part is which.
+        
         st.session_state.marketing_topic = clean
         st.session_state.debate_history = [] 
 
@@ -130,7 +134,7 @@ st.markdown(
     """
     <div style="background:#f0f2f6;padding:20px;border-left:6px solid #485cc7;border-radius:10px;margin-bottom:25px">
         <h4 style="margin-top:0">ℹ️ About This Tool</h4>
-        <p>This tool uses a <strong>Hybrid AI Architecture</strong>: OpenAI (GPT-4o) for persona simulation (Drama) and Google Gemini (3.0 Flash) for strategic analysis.</p>
+        <p>This tool uses a <strong>Hybrid AI Architecture</strong>: OpenAI (GPT-4o) for persona simulation and Google Gemini (3.0 Flash) for strategic analysis.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -139,14 +143,24 @@ st.markdown(
 tab1, tab2 = st.tabs(["🗣️ Individual Interview", "⚔️ Focus Group Debate"])
 
 # ================================================================================
-# TAB 1: INDIVIDUAL INTERVIEW
+# TAB 1: INDIVIDUAL INTERVIEW (RESTORED FUNCTIONALITY)
 # ================================================================================
 with tab1:
+    # 1. Segment Filter & Cheat Sheet
     segments = sorted(list({p["segment"] for p in all_personas_flat}))
     selected_segment = st.selectbox("Filter by Segment", ["All"] + segments)
     
+    if selected_segment == "All":
+        with st.expander("🔍 Segment Cheat Sheet"):
+            for seg, blurb in segment_summaries.items():
+                st.markdown(f"**{seg}**\n{blurb}\n")
+    elif selected_segment in segment_summaries:
+        with st.expander("🔍 Segment Overview", expanded=True):
+            st.write(segment_summaries[selected_segment])
+
     filtered_list = all_personas_flat if selected_segment == "All" else [p for p in all_personas_flat if p["segment"] == selected_segment]
 
+    # 2. Persona Grid
     st.markdown("### 👥 Select a Persona")
     cols = st.columns(3)
     
@@ -163,56 +177,104 @@ with tab1:
                     st.session_state.selected_segment = entry["segment"]
                     st.rerun()
 
+    # 3. Detailed Profile View
     if "selected_persona" in st.session_state:
         p = st.session_state.selected_persona
         seg = st.session_state.selected_segment
 
         st.markdown("---")
+        # RESTORED: Rich Profile HTML
         st.markdown(
             f"""
             <div style="background:#e3f6d8;padding:20px;border-left:6px solid #43B02A;border-radius:10px">
                 <h4 style="margin-top:0">{p['name']} <span style="font-weight:normal">({seg})</span></h4>
-                <p><strong>Age:</strong> {p.get('age')} | <strong>Loc:</strong> {p.get('location')}</p>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <div>
+                        <p><strong>Age:</strong> {p.get('age')}</p>
+                        <p><strong>Location:</strong> {p.get('location')}</p>
+                        <p><strong>Occupation:</strong> {p.get('occupation')}</p>
+                    </div>
+                    <div>
+                        <p><strong>Income:</strong> ${p.get('income', 0):,}</p>
+                        <p><strong>Risk:</strong> {p.get('behavioural_traits', {}).get('risk_tolerance', 'Unknown')}</p>
+                        <p><strong>Confidence:</strong> {p.get('future_confidence')}/5</p>
+                    </div>
+                </div>
+                <hr style="margin:10px 0; border-top: 1px solid #ccc;">
+                <p><strong>Values:</strong> {', '.join(p.get('values', []))}</p>
+                <p><strong>Goals:</strong> {'; '.join(p.get('goals', []))}</p>
                 <p><strong>Narrative:</strong> {p['narrative']}</p>
+                <p><strong>Recent Budget Cuts:</strong> {', '.join(p.get('budget_adjustments_6m', ['None']))}</p>
             </div>""",
             unsafe_allow_html=True,
         )
 
-        st.markdown("### 💬 Ask a Question")
-        user_input = st.text_area("Enter your question:", key="q_input")
-        
-        if st.button("Ask Persona", type="primary"):
+        # RESTORED: Suggested Questions
+        st.markdown("### 💡 Suggested Questions")
+        if p.get("suggestions"):
+            cols_s = st.columns(len(p["suggestions"]))
+            for idx, s in enumerate(p["suggestions"]):
+                if cols_s[idx].button(f"Ask: {s[:30]}...", key=f"sugg_{idx}"):
+                    st.session_state.question_input = s
+                    st.rerun()
+        else:
+            st.caption("No specific suggestions for this persona.")
+
+        # 4. Q&A Interface
+        st.markdown("### 💬 Interaction")
+        user_input = st.text_area("Enter your question:", value=st.session_state.question_input, key="q_input")
+        ask_all = st.checkbox("Ask ALL visible personas (Batch Test)")
+
+        if st.button("Ask Persona(s)", type="primary"):
             if not user_input:
                 st.warning("Please enter a question.")
             else:
-                sys_msg = (
-                    f"You are {p['name']}, a {p['age']}-year-old {p['occupation']}. "
-                    f"Bio: {p['narrative']}. Values: {', '.join(p['values'])}. "
-                    "Respond in character. Be conversational."
-                )
+                target_list = filtered_list if ask_all else [{"persona": p}]
                 
-                hist = st.session_state.chat_history.get(p["name"], [])
-                messages = [{"role": "system", "content": sys_msg}]
-                for q, a in hist[-3:]:
-                    messages.append({"role": "user", "content": q})
-                    messages.append({"role": "assistant", "content": a})
-                messages.append({"role": "user", "content": user_input})
+                with st.spinner(f"Interviewing {len(target_list)} persona(s)..."):
+                    for target in target_list:
+                        tp = target["persona"]
+                        
+                        sys_msg = (
+                            f"You are {tp['name']}, a {tp['age']}-year-old {tp['occupation']}. "
+                            f"Bio: {tp['narrative']}. Values: {', '.join(tp['values'])}. "
+                            f"Income: ${tp.get('income')}. Risk Tolerance: {tp.get('behavioural_traits', {}).get('risk_tolerance')}. "
+                            "Respond in character. Be conversational."
+                        )
+                        
+                        hist = st.session_state.chat_history.get(tp["name"], [])
+                        messages = [{"role": "system", "content": sys_msg}]
+                        for q, a in hist[-3:]:
+                            messages.append({"role": "user", "content": q})
+                            messages.append({"role": "assistant", "content": a})
+                        messages.append({"role": "user", "content": user_input})
 
-                with st.spinner("Typing..."):
-                    ans = query_openai(messages)
+                        ans = query_openai(messages) # Still using GPT-4o for individual chats
+                        st.session_state.chat_history.setdefault(tp["name"], []).append((user_input, ans))
                 
-                st.session_state.chat_history.setdefault(p["name"], []).append((user_input, ans))
+                st.success("Responses received!")
                 st.rerun()
 
-        if p["name"] in st.session_state.chat_history:
-            st.markdown("#### Conversation History")
-            for q, a in reversed(st.session_state.chat_history[p["name"]]):
-                st.markdown(f"<div class='chat-bubble user-bubble'><strong>You:</strong> {q}</div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='chat-bubble bot-bubble'><strong>{p['name']}:</strong> {a}</div>", unsafe_allow_html=True)
+        # Display History
+        if ask_all:
+             st.markdown("#### Batch Results")
+             for target in filtered_list:
+                 tp = target["persona"]
+                 if tp["name"] in st.session_state.chat_history:
+                     last_q, last_a = st.session_state.chat_history[tp["name"]][-1]
+                     if last_q == user_input:
+                         st.markdown(f"**{tp['name']}:** {last_a}")
+                         st.divider()
+        else:
+            if p["name"] in st.session_state.chat_history:
+                st.markdown("#### Conversation History")
+                for q, a in reversed(st.session_state.chat_history[p["name"]]):
+                    st.markdown(f"<div class='chat-bubble user-bubble'><strong>You:</strong> {q}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='chat-bubble bot-bubble'><strong>{p['name']}:</strong> {a}</div>", unsafe_allow_html=True)
 
 
 # ================================================================================
-# TAB 2: FOCUS GROUP DEBATE (HYBRID)
+# TAB 2: FOCUS GROUP DEBATE (HYBRID & UNCHANGED)
 # ================================================================================
 with tab2:
     st.header("⚔️ Marketing Focus Group")
@@ -231,7 +293,7 @@ with tab2:
     marketing_topic = st.text_area(
         "Marketing Headline / Copy", 
         key="marketing_topic",
-        height=150 # Made taller to accommodate full email drafts
+        height=150 
     )
     
     if st.button("🚀 Start Focus Group", type="primary"):
@@ -241,9 +303,6 @@ with tab2:
         p_a = persona_options[p1_key]
         p_b = persona_options[p2_key]
 
-        # ────────────────────────────────────────────────────────────────────────
-        # EMOTIONAL PROMPTS (The "Hot-Take" Logic)
-        # ────────────────────────────────────────────────────────────────────────
         base_instruction = (
             "IMPORTANT: This is a simulation for marketing research. "
             "You are roleplaying a real investor. Be conversational, not a caricature. "
@@ -264,9 +323,6 @@ with tab2:
             "You are trying to be the voice of reason. You are calm but firm."
         )
 
-        # ────────────────────────────────────────────────────────────────────────
-        # THE DEBATE LOOP (POWERED BY OPENAI)
-        # ────────────────────────────────────────────────────────────────────────
         chat_container = st.container()
         
         with chat_container:
@@ -299,15 +355,12 @@ with tab2:
             st.session_state.debate_history.append({"name": p_a["name"], "text": msg_a_2})
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a_2}")
 
-            # ────────────────────────────────────────────────────────────────────
-            # MODERATOR (POWERED BY GEMINI 3 FLASH PREVIEW)
-            # ────────────────────────────────────────────────────────────────────
+            # 4. MODERATOR (GEMINI 3 FLASH)
             st.divider()
             st.subheader("📊 Strategic Analysis (Powered by Gemini 3 Flash)")
             with st.spinner("Gemini 3 is analyzing the psychology..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
                 
-                # UPDATED PROMPT: REQUESTS SUBJECT LINE + KILLER OPENING
                 mod_prompt = f"""
                 You are a legendary Direct Response Copywriter (Motley Fool Style).
                 
@@ -333,9 +386,6 @@ with tab2:
                 st.info(summary)
                 st.session_state.suggested_rewrite = summary 
 
-    # ────────────────────────────────────────────────────────────────────────
-    # FEEDBACK LOOP BUTTON
-    # ────────────────────────────────────────────────────────────────────────
     if st.session_state.debate_history and st.session_state.suggested_rewrite:
         st.markdown("---")
         st.markdown("### 🔄 Iterate")
