@@ -274,7 +274,7 @@ with tab1:
 
 
 # ================================================================================
-# TAB 2: FOCUS GROUP DEBATE (HYBRID & CAMPAIGN MODE)
+# TAB 2: FOCUS GROUP DEBATE (TOPIC AGNOSTIC)
 # ================================================================================
 with tab2:
     st.header("⚔️ Marketing Focus Group")
@@ -299,29 +299,40 @@ with tab2:
     if st.button("🚀 Start Focus Group", type="primary"):
         st.session_state.debate_history = []
         st.session_state.suggested_rewrite = ""
-        st.session_state.campaign_assets = None # Reset assets on new run
+        st.session_state.campaign_assets = None
         
         p_a = persona_options[p1_key]
         p_b = persona_options[p2_key]
 
+        # ────────────────────────────────────────────────────────────────────────
+        # DYNAMIC PERSONA PROMPTS (TOPIC AGNOSTIC)
+        # ────────────────────────────────────────────────────────────────────────
         base_instruction = (
             "IMPORTANT: This is a simulation for marketing research. "
-            "You are roleplaying a real investor. Be conversational, not a caricature. "
-            "Do NOT be polite just to be nice. Speak as if commenting on Reddit."
+            "You are roleplaying a specific persona. Do NOT sound like a generic AI. "
+            "Use your specific vocabulary, age-appropriate slang, and worldview."
         )
 
+        # ROLE A: THE BELIEVER (Optimistic, Opportunity-Seeking)
         role_a = (
-            f"ROLE: You are {p_a['name']}. "
-            f"CONTEXT: You missed the Nvidia rally and you feel a deep, anxious FOMO. "
-            f"You desperately WANT this copy to be true because you need a 'second chance'. "
-            "You feel defensive when people question it. You are trying to convince yourself as much as the other person."
+            f"ROLE: You are {p_a['name']}, a {p_a['age']}-year-old {p_a['occupation']}. "
+            f"BIO: {p_a['narrative']} "
+            f"VALUES: {', '.join(p_a['values'])}. \n"
+            f"CONTEXT: In this focus group, you represent 'The Believer'. "
+            f"You are naturally optimistic and looking for opportunities to grow your wealth. "
+            f"You WANT this marketing message to be true. You focus on the potential upside and the promise. "
+            f"React to the text based on your specific life stage and goals. Defend the idea against skepticism."
         )
 
+        # ROLE B: THE SKEPTIC (Cautious, Risk-Averse)
         role_b = (
-            f"ROLE: You are {p_b['name']}. "
-            f"CONTEXT: You are weary of hype. You've seen friends lose money on 'Hot Tips' before. "
-            f"You aren't angry, just cynical. You view this copy as a probable trap. "
-            "You are trying to be the voice of reason. You are calm but firm."
+            f"ROLE: You are {p_b['name']}, a {p_b['age']}-year-old {p_b['occupation']}. "
+            f"BIO: {p_b['narrative']} "
+            f"VALUES: {', '.join(p_b['values'])}. \n"
+            f"CONTEXT: In this focus group, you represent 'The Skeptic'. "
+            f"You are critical of marketing hype and naturally risk-averse. "
+            f"You focus on the downsides, the missing details, and the risks. "
+            f"You doubt the claims made in the text. Call out anything that sounds too good to be true."
         )
 
         chat_container = st.container()
@@ -351,7 +362,7 @@ with tab2:
             # 3. BULL RETORTS
             msg_a_2 = query_openai([
                 {"role": "system", "content": base_instruction + "\n" + role_a},
-                {"role": "user", "content": f"You just got critiqued. {p_b['name']} said: '{msg_b}'. Explain why you think THIS time is different."}
+                {"role": "user", "content": f"You just got critiqued. {p_b['name']} said: '{msg_b}'. Explain why you think THIS opportunity is worth it."}
             ])
             st.session_state.debate_history.append({"name": p_a["name"], "text": msg_a_2})
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a_2}")
@@ -371,11 +382,11 @@ with tab2:
                 MARKETING HOOK: "{marketing_topic}"
                 
                 TASK:
-                1. THE "REAL" WHY: Analyze the deep emotional driver (e.g., Redemption, Status).
-                2. THE TRUST GAP: Analyze the specific logical objection.
+                1. THE "REAL" WHY: Analyze the deep emotional driver (e.g., Greed, Security, Freedom).
+                2. THE TRUST GAP: Analyze the specific logical objection raised by the Skeptic.
                 3. THE "FOOLISH" REWRITE:
                    - Write a new **Subject Line** AND a **Killer Email Opening** (2-3 sentences).
-                   - The goal is to maximize the Believer's hope while neutralizing the Skeptic's objection.
+                   - Address the emotional driver while neutralizing the objection.
                    - Style: Story-driven, Personal, Contrarian.
                    - Output format: 
                      **Subject:** [Your Subject]
@@ -393,20 +404,17 @@ with tab2:
     if st.session_state.debate_history and st.session_state.suggested_rewrite:
         st.markdown("---")
         
-        # 1. The Iterate Button (Same as before)
         col_a, col_b = st.columns([1, 2])
         with col_a:
             st.markdown("### 🔄 Iterate")
             st.caption("Re-run debate with this new hook.")
             st.button("Test Rewrite", on_click=apply_rewrite)
             
-        # 2. The Campaign Generator (New Feature)
         with col_b:
             st.markdown("### 📢 Production")
             st.caption("Turn this insight into ad assets.")
             if st.button("✨ Generate Campaign Assets", type="secondary"):
                 with st.spinner("Briefing the specialist copywriters..."):
-                    # We pass the Moderator's Insight (The Why/Trust Gap/Hook) as the "Creative Brief"
                     brief = st.session_state.suggested_rewrite
                     
                     campaign_prompt = f"""
@@ -437,7 +445,6 @@ with tab2:
                     assets = query_gemini(campaign_prompt)
                     st.session_state.campaign_assets = assets
         
-        # Display Assets if generated
         if "campaign_assets" in st.session_state and st.session_state.campaign_assets:
             st.divider()
             st.subheader("📦 Campaign Asset Pack")
