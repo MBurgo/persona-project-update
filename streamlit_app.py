@@ -274,7 +274,7 @@ with tab1:
 
 
 # ================================================================================
-# TAB 2: FOCUS GROUP DEBATE (HYBRID & UNCHANGED)
+# TAB 2: FOCUS GROUP DEBATE (HYBRID & CAMPAIGN MODE)
 # ================================================================================
 with tab2:
     st.header("⚔️ Marketing Focus Group")
@@ -299,6 +299,7 @@ with tab2:
     if st.button("🚀 Start Focus Group", type="primary"):
         st.session_state.debate_history = []
         st.session_state.suggested_rewrite = ""
+        st.session_state.campaign_assets = None # Reset assets on new run
         
         p_a = persona_options[p1_key]
         p_b = persona_options[p2_key]
@@ -386,11 +387,58 @@ with tab2:
                 st.info(summary)
                 st.session_state.suggested_rewrite = summary 
 
+    # ────────────────────────────────────────────────────────────────────────
+    # FEEDBACK LOOP & CAMPAIGN GENERATOR
+    # ────────────────────────────────────────────────────────────────────────
     if st.session_state.debate_history and st.session_state.suggested_rewrite:
         st.markdown("---")
-        st.markdown("### 🔄 Iterate")
-        st.write("Test Gemini's suggestion?")
         
-        col_a, col_b = st.columns([1, 4])
+        # 1. The Iterate Button (Same as before)
+        col_a, col_b = st.columns([1, 2])
         with col_a:
+            st.markdown("### 🔄 Iterate")
+            st.caption("Re-run debate with this new hook.")
             st.button("Test Rewrite", on_click=apply_rewrite)
+            
+        # 2. The Campaign Generator (New Feature)
+        with col_b:
+            st.markdown("### 📢 Production")
+            st.caption("Turn this insight into ad assets.")
+            if st.button("✨ Generate Campaign Assets", type="secondary"):
+                with st.spinner("Briefing the specialist copywriters..."):
+                    # We pass the Moderator's Insight (The Why/Trust Gap/Hook) as the "Creative Brief"
+                    brief = st.session_state.suggested_rewrite
+                    
+                    campaign_prompt = f"""
+                    You are a Full-Stack Marketing Team. Use the following STRATEGIC INSIGHT to generate campaign assets.
+                    
+                    STRATEGIC INSIGHT:
+                    {brief}
+                    
+                    TASKS:
+                    1. GOOGLE SEARCH AD: 
+                       - 3x Headlines (30 chars max).
+                       - 2x Descriptions (90 chars max).
+                       - Focus: High CTR, Curiosity.
+                       
+                    2. FACEBOOK/META AD:
+                       - Primary Text (The "Scroll Stopper"): Use a Pattern Interrupt or Story hook based on the insight.
+                       - Headline: Short, punchy (5 words max).
+                       
+                    3. SALES PAGE HERO:
+                       - H1 Headline.
+                       - Subheadline (The Promise).
+                       - CTA Button Copy.
+                       
+                    OUTPUT FORMAT:
+                    Use Markdown Headers for each section (e.g. ### Google Ads).
+                    """
+                    
+                    assets = query_gemini(campaign_prompt)
+                    st.session_state.campaign_assets = assets
+        
+        # Display Assets if generated
+        if "campaign_assets" in st.session_state and st.session_state.campaign_assets:
+            st.divider()
+            st.subheader("📦 Campaign Asset Pack")
+            st.markdown(st.session_state.campaign_assets)
