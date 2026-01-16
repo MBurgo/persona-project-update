@@ -76,11 +76,10 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 # ────────────────────────────────────────────────────────────────────────────────
 # Helper Functions
 # ────────────────────────────────────────────────────────────────────────────────
-def query_llm(messages, model="gpt-4.1"): 
+def query_llm(messages, model="gpt-4o"): 
     """
     Wrapper for OpenAI call. 
-    Defaults to 'gpt-4.1' (Smartest non-reasoning) for Personas.
-    Can be overridden to 'gpt-5.2-pro' for Moderator.
+    Reverted to 'gpt-4o' to ensure compatibility with standard Chat endpoint.
     """
     try:
         completion = client.chat.completions.create(model=model, messages=messages)
@@ -174,7 +173,7 @@ with tab1:
                 messages.append({"role": "user", "content": user_input})
 
                 with st.spinner("Typing..."):
-                    ans = query_llm(messages) # Defaults to gpt-4.1
+                    ans = query_llm(messages)
                 
                 st.session_state.chat_history.setdefault(p["name"], []).append((user_input, ans))
                 st.rerun()
@@ -213,7 +212,7 @@ with tab2:
         p_b = persona_options[p2_key]
 
         # ────────────────────────────────────────────────────────────────────────
-        # PROMPTS
+        # PROMPTS (Adversarial)
         # ────────────────────────────────────────────────────────────────────────
         base_instruction = (
             "IMPORTANT: This is a simulation for marketing research. "
@@ -244,7 +243,7 @@ with tab2:
             st.markdown(f"**Topic:** *{marketing_topic}*")
             st.divider()
             
-            # 1. BULL SPEAKS (GPT-4.1)
+            # 1. BULL SPEAKS
             msg_a = query_llm([
                 {"role": "system", "content": base_instruction + "\n" + role_a},
                 {"role": "user", "content": f"React to this headline: '{marketing_topic}'."}
@@ -253,7 +252,7 @@ with tab2:
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a}")
             time.sleep(1)
 
-            # 2. BEAR RESPONDS (GPT-4.1)
+            # 2. BEAR RESPONDS
             msg_b = query_llm([
                 {"role": "system", "content": base_instruction + "\n" + role_b},
                 {"role": "user", "content": f"The headline is '{marketing_topic}'. {p_a['name']} just said: '{msg_a}'. Shut them down."}
@@ -262,7 +261,7 @@ with tab2:
             st.markdown(f"**{p_b['name']} (The Skeptic)**: {msg_b}")
             time.sleep(1)
 
-            # 3. BULL RETORTS (GPT-4.1)
+            # 3. BULL RETORTS
             msg_a_2 = query_llm([
                 {"role": "system", "content": base_instruction + "\n" + role_a},
                 {"role": "user", "content": f"You just got attacked. {p_b['name']} said: '{msg_b}'. Tell them why they are missing the big picture."}
@@ -270,9 +269,9 @@ with tab2:
             st.session_state.debate_history.append({"name": p_a["name"], "text": msg_a_2})
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a_2}")
 
-            # 4. MODERATOR SUMMARY (GPT-5.2-PRO)
+            # 4. MODERATOR SUMMARY
             st.divider()
-            st.subheader("📊 Moderator Insight (Powered by GPT-5.2 Pro)")
+            st.subheader("📊 Moderator Insight")
             with st.spinner("Analyzing friction points..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
                 
@@ -288,10 +287,7 @@ with tab2:
                 3. Rewrite the subject line to keep the Believer's interest but lower the Skeptic's defenses.
                 """
                 
-                # Using GPT-5.2-pro for high precision summary
-                summary = query_llm(
-                    [{"role": "system", "content": "You are a direct response marketing expert."}, 
-                     {"role": "user", "content": mod_prompt}],
-                    model="gpt-5.2-pro"
-                )
+                # Reverted to standard GPT-4o for stability
+                summary = query_llm([{"role": "system", "content": "You are a direct response marketing expert."}, 
+                                     {"role": "user", "content": mod_prompt}])
                 st.info(summary)
