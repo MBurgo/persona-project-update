@@ -79,7 +79,7 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 def query_llm(messages, model="gpt-4o"): 
     """
     Wrapper for OpenAI call. 
-    Reverted to 'gpt-4o' to ensure compatibility with standard Chat endpoint.
+    Defaults to 'gpt-4o' for best balance of speed and roleplay capability.
     """
     try:
         completion = client.chat.completions.create(model=model, messages=messages)
@@ -186,7 +186,7 @@ with tab1:
 
 
 # ================================================================================
-# TAB 2: FOCUS GROUP DEBATE
+# TAB 2: FOCUS GROUP DEBATE (REALISTIC TUNING)
 # ================================================================================
 with tab2:
     st.header("⚔️ Marketing Focus Group")
@@ -200,7 +200,7 @@ with tab2:
     with c2:
         p2_key = st.selectbox("Participant 2 (The Skeptic)", options=list(persona_options.keys()), index=1)
     with c3:
-        st.info("🔥 Mode: Adversarial Stress Test (Active)")
+        st.info("🔥 Mode: Adversarial Stress Test")
 
     marketing_topic = st.text_area("Marketing Headline / Copy", 
                                    value="Subject: 3 AI Stocks better than Nvidia. Urgent Buy Alert!",
@@ -212,26 +212,28 @@ with tab2:
         p_b = persona_options[p2_key]
 
         # ────────────────────────────────────────────────────────────────────────
-        # PROMPTS (Adversarial)
+        # PROMPTS (REALISTIC EMOTION)
         # ────────────────────────────────────────────────────────────────────────
         base_instruction = (
             "IMPORTANT: This is a simulation for marketing research. "
-            "Do NOT be polite. Do NOT say 'I see your point' or 'I agree'. "
-            "Make definitive statements. Be short, punchy, and emotional."
+            "You are roleplaying a real investor. Be conversational, not a caricature. "
+            "Do NOT be polite just to be nice, but do NOT be cartoonishly aggressive. "
+            "Speak as if you are commenting on a Reddit thread or talking to a friend."
         )
 
         role_a = (
-            f"ROLE: You are {p_a['name']}, but you are currently suffering from intense FOMO (Fear Of Missing Out). "
-            f"You read the headline '{marketing_topic}' and you are EXCITED. "
-            "You think this is the chance of a lifetime. You think skeptics are just 'haters' who will stay poor. "
-            "Defend this marketing hook with passion. Ignore the risks."
+            f"ROLE: You are {p_a['name']}. "
+            f"CONTEXT: You missed the Nvidia rally and you feel a deep, anxious FOMO (Fear Of Missing Out). "
+            f"You desperately WANT this headline '{marketing_topic}' to be true because you need a 'second chance' at wealth. "
+            "You feel defensive when people question it because you don't want to feel foolish for believing it. "
+            "You are trying to convince yourself as much as the other person."
         )
 
         role_b = (
-            f"ROLE: You are {p_b['name']}, and you are in a bad mood. "
-            f"You read the headline '{marketing_topic}' and you immediately flag it as 'Clickbait Trash'. "
-            "You are trying to save the other person from losing their money. "
-            "Be blunt. Tell them they are being naive. Attack the specific words 'Urgent' and 'Alert'."
+            f"ROLE: You are {p_b['name']}. "
+            f"CONTEXT: You are weary of hype. You've seen friends lose money on 'Hot Tips' before. "
+            f"You aren't angry, just cynical. You view the headline '{marketing_topic}' as a probable trap for gullible people. "
+            "You are trying to be the voice of reason. You are calm but firm that this is dangerous."
         )
 
         # ────────────────────────────────────────────────────────────────────────
@@ -243,7 +245,7 @@ with tab2:
             st.markdown(f"**Topic:** *{marketing_topic}*")
             st.divider()
             
-            # 1. BULL SPEAKS
+            # 1. BULL SPEAKS (Anxious Hope)
             msg_a = query_llm([
                 {"role": "system", "content": base_instruction + "\n" + role_a},
                 {"role": "user", "content": f"React to this headline: '{marketing_topic}'."}
@@ -252,19 +254,19 @@ with tab2:
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a}")
             time.sleep(1)
 
-            # 2. BEAR RESPONDS
+            # 2. BEAR RESPONDS (Weary Cynicism)
             msg_b = query_llm([
                 {"role": "system", "content": base_instruction + "\n" + role_b},
-                {"role": "user", "content": f"The headline is '{marketing_topic}'. {p_a['name']} just said: '{msg_a}'. Shut them down."}
+                {"role": "user", "content": f"The headline is '{marketing_topic}'. {p_a['name']} just said: '{msg_a}'. Give them a reality check."}
             ])
             st.session_state.debate_history.append({"name": p_b["name"], "text": msg_b})
             st.markdown(f"**{p_b['name']} (The Skeptic)**: {msg_b}")
             time.sleep(1)
 
-            # 3. BULL RETORTS
+            # 3. BULL RETORTS (Defensive Justification)
             msg_a_2 = query_llm([
                 {"role": "system", "content": base_instruction + "\n" + role_a},
-                {"role": "user", "content": f"You just got attacked. {p_b['name']} said: '{msg_b}'. Tell them why they are missing the big picture."}
+                {"role": "user", "content": f"You just got critiqued. {p_b['name']} said: '{msg_b}'. Explain why you think THIS time is different."}
             ])
             st.session_state.debate_history.append({"name": p_a["name"], "text": msg_a_2})
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a_2}")
@@ -282,12 +284,11 @@ with tab2:
                 {transcript}
                 
                 TASK:
-                1. Identify the specific word or phrase that triggered the Skeptic the most.
-                2. Explain why the Believer was interested (what was the hook?).
+                1. Identify the specific word or phrase that triggered the Skeptic's cynicism.
+                2. Identify the emotional hook that grabbed the Believer (was it greed, fear, or redemption?).
                 3. Rewrite the subject line to keep the Believer's interest but lower the Skeptic's defenses.
                 """
                 
-                # Reverted to standard GPT-4o for stability
                 summary = query_llm([{"role": "system", "content": "You are a direct response marketing expert."}, 
                                      {"role": "user", "content": mod_prompt}])
                 st.info(summary)
