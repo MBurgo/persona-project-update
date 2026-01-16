@@ -100,18 +100,22 @@ def query_gemini(prompt):
 
 # CALLBACK FUNCTION
 def apply_rewrite():
+    """
+    Extracts the full rewrite (Subject + Body) to feed back into the debate.
+    """
     raw = st.session_state.suggested_rewrite
     if raw:
-        # Improved parsing: Look for the FINAL bold line, which is usually the headline
-        if "**" in raw:
-            parts = raw.split("**")
-            # Usually the last bold item is the headline in the new format
-            clean = parts[-2] if len(parts) >= 2 else raw
-        else:
-            clean = raw
-        
-        # Cleanup
-        clean = clean.strip(" :.\n\"")
+        clean = raw
+        # Look for the "FOOLISH REWRITE" section or similar marker
+        if "3. THE" in raw:
+            # Grab everything after point 3
+            parts = raw.split("3. THE")
+            if len(parts) > 1:
+                # Remove the label line itself (e.g. "FOOLISH REWRITE:")
+                clean = parts[1].split("\n", 1)[-1].strip()
+        elif "REWRITE:" in raw:
+            clean = raw.split("REWRITE:")[-1].strip()
+            
         st.session_state.marketing_topic = clean
         st.session_state.debate_history = [] 
 
@@ -224,7 +228,8 @@ with tab2:
 
     marketing_topic = st.text_area(
         "Marketing Headline / Copy", 
-        key="marketing_topic"
+        key="marketing_topic",
+        height=150 # Made taller to accommodate full email drafts
     )
     
     if st.button("🚀 Start Focus Group", type="primary"):
@@ -246,14 +251,14 @@ with tab2:
         role_a = (
             f"ROLE: You are {p_a['name']}. "
             f"CONTEXT: You missed the Nvidia rally and you feel a deep, anxious FOMO. "
-            f"You desperately WANT this headline to be true because you need a 'second chance'. "
+            f"You desperately WANT this copy to be true because you need a 'second chance'. "
             "You feel defensive when people question it. You are trying to convince yourself as much as the other person."
         )
 
         role_b = (
             f"ROLE: You are {p_b['name']}. "
             f"CONTEXT: You are weary of hype. You've seen friends lose money on 'Hot Tips' before. "
-            f"You aren't angry, just cynical. You view this headline as a probable trap. "
+            f"You aren't angry, just cynical. You view this copy as a probable trap. "
             "You are trying to be the voice of reason. You are calm but firm."
         )
 
@@ -269,7 +274,7 @@ with tab2:
             # 1. BULL SPEAKS
             msg_a = query_openai([
                 {"role": "system", "content": base_instruction + "\n" + role_a},
-                {"role": "user", "content": f"React to this headline: '{marketing_topic}'."}
+                {"role": "user", "content": f"React to this marketing text: '{marketing_topic}'."}
             ])
             st.session_state.debate_history.append({"name": p_a["name"], "text": msg_a})
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a}")
@@ -278,7 +283,7 @@ with tab2:
             # 2. BEAR RESPONDS
             msg_b = query_openai([
                 {"role": "system", "content": base_instruction + "\n" + role_b},
-                {"role": "user", "content": f"The headline is '{marketing_topic}'. {p_a['name']} just said: '{msg_a}'. Give them a reality check."}
+                {"role": "user", "content": f"The marketing text is '{marketing_topic}'. {p_a['name']} just said: '{msg_a}'. Give them a reality check."}
             ])
             st.session_state.debate_history.append({"name": p_b["name"], "text": msg_b})
             st.markdown(f"**{p_b['name']} (The Skeptic)**: {msg_b}")
@@ -300,7 +305,7 @@ with tab2:
             with st.spinner("Gemini 3 is analyzing the psychology..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
                 
-                # UPDATED PROMPT: STRICT COPYWRITING CONSTRAINTS
+                # UPDATED PROMPT: ENCOURAGES THE "FULL HOOK"
                 mod_prompt = f"""
                 You are a legendary Direct Response Copywriter (Motley Fool Style).
                 
@@ -313,11 +318,13 @@ with tab2:
                 1. THE "REAL" WHY: Analyze the deep emotional driver (e.g., Redemption, Status).
                 2. THE TRUST GAP: Analyze the specific logical objection.
                 3. THE "FOOLISH" REWRITE:
-                   - Write a SUBJECT LINE (Max 15 words).
-                   - STOP EXPLAINING. START SELLING.
-                   - Hit the emotional trigger (Redemption) AND hint at the logical solution (The Mechanism) without giving it away.
-                   - Do not use technical jargon. Use "Tease" logic.
-                   - Output ONLY the final subject line in bold.
+                   - Write a new **Subject Line** AND a **Killer Email Opening** (2-3 sentences).
+                   - The goal is to maximize the Believer's hope while neutralizing the Skeptic's objection.
+                   - Style: Story-driven, Personal, Contrarian.
+                   - Output format: 
+                     **Subject:** [Your Subject]
+                     
+                     **Body:** [Your Body]
                 """
                 
                 summary = query_gemini(mod_prompt)
