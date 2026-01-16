@@ -88,27 +88,51 @@ except KeyError:
 def query_gemini(prompt):
     """
     Uses Gemini 3 Flash Preview for the Moderator.
-    Falls back to OpenAI if the preview model is unavailable in your region.
+    Falls back to OpenAI if Gemini fails.
     """
     try:
-        # UPDATED: Using the latest Gemini 3 Flash Preview model
         model = genai.GenerativeModel('gemini-3-flash-preview')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        # Fallback to OpenAI if Gemini crashes
         return f"Gemini Error ({str(e)}). \n\nFallback Analysis:\n" + \
                query_openai([{"role": "user", "content": prompt}])
 
-# CALLBACK FUNCTION
+# ────────────────────────────────────────────────────────────────────────────────
+# IMPROVED REWRITE PARSER
+# ────────────────────────────────────────────────────────────────────────────────
 def apply_rewrite():
+    """
+    Robust extraction logic. Finds the section after 'REWRITE' 
+    and grabs the bolded content, ignoring headers.
+    """
     raw = st.session_state.suggested_rewrite
     if raw:
-        if "**" in raw:
+        clean = raw # default fallback
+        
+        # 1. Look for the explicit "REWRITE" section to narrow search
+        if "REWRITE" in raw:
+            # Take everything after the word "REWRITE"
+            section = raw.split("REWRITE")[-1] 
+            
+            # Now find bold text inside that section
+            if "**" in section:
+                # parts[1] is the content inside the first set of ** ** in this section
+                clean = section.split("**")[1]
+            else:
+                clean = section.strip()
+        
+        # 2. Fallback: If no REWRITE tag, take the LAST bolded section in the whole text
+        elif "**" in raw:
             parts = raw.split("**")
-            clean = parts[1] if len(parts) > 1 else raw
-        else:
-            clean = raw
+            # parts[1::2] gives a list of all bolded strings
+            bold_items = parts[1::2]
+            if bold_items:
+                clean = bold_items[-1] # Assume headline is the last bold item
+        
+        # Clean up any formatting junk (colons, newlines)
+        clean = clean.strip(" :.\n")
+        
         st.session_state.marketing_topic = clean
         st.session_state.debate_history = [] 
 
@@ -121,7 +145,7 @@ st.markdown(
     """
     <div style="background:#f0f2f6;padding:20px;border-left:6px solid #485cc7;border-radius:10px;margin-bottom:25px">
         <h4 style="margin-top:0">ℹ️ About This Tool</h4>
-        <p>This tool uses a <strong>Hybrid AI Architecture</strong>: OpenAI (GPT-4o) for persona simulation and Google Gemini (3.0 Flash) for strategic analysis.</p>
+        <p>This tool uses a <strong>Hybrid AI Architecture</strong>: OpenAI for persona simulation (Drama) and Google Gemini for strategic analysis (Reasoning).</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -232,7 +256,7 @@ with tab2:
         p_b = persona_options[p2_key]
 
         # ────────────────────────────────────────────────────────────────────────
-        # EMOTIONAL PROMPTS (The "Hot-Take" Logic)
+        # EMOTIONAL PROMPTS
         # ────────────────────────────────────────────────────────────────────────
         base_instruction = (
             "IMPORTANT: This is a simulation for marketing research. "
@@ -297,6 +321,7 @@ with tab2:
             with st.spinner("Gemini 3 is analyzing the psychology..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
                 
+                # UPDATED PROMPT: More constraints on style to improve quality
                 mod_prompt = f"""
                 You are a legendary Direct Response Copywriter and Behavioral Psychologist.
                 
@@ -310,7 +335,11 @@ with tab2:
                 2. THE TRUST GAP: What specific logical objection did the Skeptic raise?
                 3. THE "FOOLISH" REWRITE:
                    - Write a new headline that satisfies the Believer's emotion AND answers the Skeptic's logic.
-                   - Style: Punchy, Contrarian, Intriguing (Motley Fool style).
+                   - STYLE RULES:
+                     - Do NOT use "marketing" words like "Discover", "Unveil", "Unlock".
+                     - Do NOT use generic questions ("Can you spot...?").
+                     - Be direct, specific, and contrarian.
+                     - Focus on the "Mechanism" (Why is this opportunity happening?).
                    - Output: ONLY the final headline in bold.
                 """
                 
