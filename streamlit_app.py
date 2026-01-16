@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import time
 from openai import OpenAI
+import google.generativeai as genai
 
 # ────────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIGURATION
@@ -31,7 +32,6 @@ if "chat_history" not in st.session_state:
 if "debate_history" not in st.session_state:
     st.session_state.debate_history = []
 if "marketing_topic" not in st.session_state:
-    # Set default value
     st.session_state.marketing_topic = "Subject: 3 AI Stocks better than Nvidia. Urgent Buy Alert!"
 if "suggested_rewrite" not in st.session_state:
     st.session_state.suggested_rewrite = ""
@@ -66,32 +66,45 @@ def load_and_patch_data():
 persona_data_raw, all_personas_flat = load_and_patch_data()
 
 # ────────────────────────────────────────────────────────────────────────────────
-# OPENAI CLIENT & HELPERS
+# AI CLIENTS (HYBRID ARCHITECTURE)
 # ────────────────────────────────────────────────────────────────────────────────
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-def query_llm(messages, model="gpt-4o"): 
+# 1. OPENAI (For Personas/Drama)
+client_openai = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+def query_openai(messages, model="gpt-4o"): 
     try:
-        completion = client.chat.completions.create(model=model, messages=messages)
+        completion = client_openai.chat.completions.create(model=model, messages=messages)
         return completion.choices[0].message.content.strip()
     except Exception as e:
         return f"Error: {str(e)}"
 
-# CALLBACK FUNCTION TO FIX STREAMLIT ERROR
+# 2. GEMINI (For Moderator/Copywriting)
+try:
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+except KeyError:
+    st.error("🚨 Missing GOOGLE_API_KEY in secrets.toml")
+
+def query_gemini(prompt):
+    """Uses Gemini 1.5 Pro for high-quality reasoning and copywriting."""
+    try:
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Gemini Error: {str(e)}"
+
+# CALLBACK FUNCTION (Fixes the Streamlit Loop Error)
 def apply_rewrite():
-    """Updates the marketing topic in session state before the re-run."""
     raw = st.session_state.suggested_rewrite
     if raw:
-        # Try to extract content between double asterisks (bold)
         if "**" in raw:
             parts = raw.split("**")
-            # Usually the rewrite is the second part (index 1) or last part
             clean = parts[1] if len(parts) > 1 else raw
         else:
             clean = raw
         st.session_state.marketing_topic = clean
-        # Clear the history so the new debate starts fresh
-        st.session_state.debate_history = []
+        st.session_state.debate_history = [] # Reset for new debate
 
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN UI
@@ -102,7 +115,7 @@ st.markdown(
     """
     <div style="background:#f0f2f6;padding:20px;border-left:6px solid #485cc7;border-radius:10px;margin-bottom:25px">
         <h4 style="margin-top:0">ℹ️ About This Tool</h4>
-        <p>This tool uses AI‑generated investor personas based on real research to simulate feedback.</p>
+        <p>This tool uses a <strong>Hybrid AI Architecture</strong>: OpenAI for persona simulation (Drama) and Google Gemini for strategic analysis (Reasoning).</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -111,7 +124,7 @@ st.markdown(
 tab1, tab2 = st.tabs(["🗣️ Individual Interview", "⚔️ Focus Group Debate"])
 
 # ================================================================================
-# TAB 1: INDIVIDUAL INTERVIEW
+# TAB 1: INDIVIDUAL INTERVIEW (Standard)
 # ================================================================================
 with tab1:
     segments = sorted(list({p["segment"] for p in all_personas_flat}))
@@ -171,7 +184,7 @@ with tab1:
                 messages.append({"role": "user", "content": user_input})
 
                 with st.spinner("Typing..."):
-                    ans = query_llm(messages)
+                    ans = query_openai(messages)
                 
                 st.session_state.chat_history.setdefault(p["name"], []).append((user_input, ans))
                 st.rerun()
@@ -184,7 +197,7 @@ with tab1:
 
 
 # ================================================================================
-# TAB 2: FOCUS GROUP DEBATE
+# TAB 2: FOCUS GROUP DEBATE (HYBRID: OpenAI Debate -> Gemini Analysis)
 # ================================================================================
 with tab2:
     st.header("⚔️ Marketing Focus Group")
@@ -200,7 +213,6 @@ with tab2:
     with c3:
         st.info("🔥 Mode: Adversarial Stress Test")
 
-    # Text Area bound to session state 'marketing_topic'
     marketing_topic = st.text_area(
         "Marketing Headline / Copy", 
         key="marketing_topic"
@@ -208,13 +220,13 @@ with tab2:
     
     if st.button("🚀 Start Focus Group", type="primary"):
         st.session_state.debate_history = []
-        st.session_state.suggested_rewrite = "" # Reset previous rewrite
+        st.session_state.suggested_rewrite = ""
         
         p_a = persona_options[p1_key]
         p_b = persona_options[p2_key]
 
         # ────────────────────────────────────────────────────────────────────────
-        # EMOTIONAL PROMPTS
+        # PROMPTS (Same emotional tuning)
         # ────────────────────────────────────────────────────────────────────────
         base_instruction = (
             "IMPORTANT: This is a simulation for marketing research. "
@@ -225,7 +237,7 @@ with tab2:
         role_a = (
             f"ROLE: You are {p_a['name']}. "
             f"CONTEXT: You missed the Nvidia rally and you feel a deep, anxious FOMO. "
-            f"You desperately WANT this headline to be true because you need a 'second chance' at wealth. "
+            f"You desperately WANT this headline to be true because you need a 'second chance'. "
             "You feel defensive when people question it. You are trying to convince yourself as much as the other person."
         )
 
@@ -233,11 +245,11 @@ with tab2:
             f"ROLE: You are {p_b['name']}. "
             f"CONTEXT: You are weary of hype. You've seen friends lose money on 'Hot Tips' before. "
             f"You aren't angry, just cynical. You view this headline as a probable trap. "
-            "You are trying to be the voice of reason. You are calm but firm that this is dangerous."
+            "You are trying to be the voice of reason. You are calm but firm."
         )
 
         # ────────────────────────────────────────────────────────────────────────
-        # THE DEBATE LOOP
+        # THE DEBATE LOOP (POWERED BY OPENAI GPT-4o)
         # ────────────────────────────────────────────────────────────────────────
         chat_container = st.container()
         
@@ -246,7 +258,7 @@ with tab2:
             st.divider()
             
             # 1. BULL SPEAKS
-            msg_a = query_llm([
+            msg_a = query_openai([
                 {"role": "system", "content": base_instruction + "\n" + role_a},
                 {"role": "user", "content": f"React to this headline: '{marketing_topic}'."}
             ])
@@ -255,7 +267,7 @@ with tab2:
             time.sleep(1)
 
             # 2. BEAR RESPONDS
-            msg_b = query_llm([
+            msg_b = query_openai([
                 {"role": "system", "content": base_instruction + "\n" + role_b},
                 {"role": "user", "content": f"The headline is '{marketing_topic}'. {p_a['name']} just said: '{msg_a}'. Give them a reality check."}
             ])
@@ -264,7 +276,7 @@ with tab2:
             time.sleep(1)
 
             # 3. BULL RETORTS
-            msg_a_2 = query_llm([
+            msg_a_2 = query_openai([
                 {"role": "system", "content": base_instruction + "\n" + role_a},
                 {"role": "user", "content": f"You just got critiqued. {p_b['name']} said: '{msg_b}'. Explain why you think THIS time is different."}
             ])
@@ -272,54 +284,43 @@ with tab2:
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a_2}")
 
             # ────────────────────────────────────────────────────────────────────
-            # MODERATOR (IMPROVED PROMPT)
+            # MODERATOR (POWERED BY GOOGLE GEMINI 1.5 PRO)
             # ────────────────────────────────────────────────────────────────────
             st.divider()
-            st.subheader("📊 Strategic Analysis")
-            with st.spinner("Analyzing the deep psychology..."):
+            st.subheader("📊 Strategic Analysis (Powered by Gemini 1.5 Pro)")
+            with st.spinner("Gemini is analyzing the psychology..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
                 
-                # UPDATED PROMPT: Added instruction to be specific rather than generic
                 mod_prompt = f"""
-                You are a world-class Direct Response Copywriter and Behavioral Psychologist. 
+                You are a legendary Direct Response Copywriter and Behavioral Psychologist.
                 
-                TRANSCRIPT:
+                TRANSCRIPT OF DEBATE:
                 {transcript}
                 
                 MARKETING HOOK: "{marketing_topic}"
                 
-                PROVIDE THIS REPORT:
-                
-                1. THE "REAL" WHY (Psychology):
-                Ignore the surface excitement. What is the *actual* emotion driving the Believer? 
-                (Is it Redemption? Status? Greed? Revenge against the market?)
-                
-                2. THE TRUST GAP (Objection):
-                What specifically made the Skeptic bail? 
-                
+                TASK:
+                1. THE "REAL" WHY: What deep emotion is driving the Believer? (Redemption? Status? Revenge?).
+                2. THE TRUST GAP: What specific logical objection did the Skeptic raise?
                 3. THE "FOOLISH" REWRITE:
-                Rewrite the headline.
-                - RULES: Be punchy and contrarian (Motley Fool style).
-                - Address the specific pain point (e.g. missing Nvidia) directly.
-                - Avoid generic questions like "Can you spot...". 
-                - Output ONLY the rewrite in bold for the final line.
+                   - Write a new headline that satisfies the Believer's emotion AND answers the Skeptic's logic.
+                   - Style: Punchy, Contrarian, Intriguing (Motley Fool style).
+                   - Output: ONLY the final headline in bold.
                 """
                 
-                summary = query_llm([{"role": "system", "content": "You are a legendary marketing strategist."}, 
-                                     {"role": "user", "content": mod_prompt}])
+                # Calling Gemini here
+                summary = query_gemini(mod_prompt)
                 st.info(summary)
-                
                 st.session_state.suggested_rewrite = summary 
 
     # ────────────────────────────────────────────────────────────────────────
-    # FEEDBACK LOOP BUTTON
+    # FEEDBACK LOOP
     # ────────────────────────────────────────────────────────────────────────
     if st.session_state.debate_history and st.session_state.suggested_rewrite:
         st.markdown("---")
         st.markdown("### 🔄 Iterate")
-        st.write("Test the Moderator's suggestion?")
+        st.write("Test Gemini's suggestion?")
         
         col_a, col_b = st.columns([1, 4])
         with col_a:
-            # FIX: Use on_click callback to update state safely
             st.button("Test Rewrite", on_click=apply_rewrite)
