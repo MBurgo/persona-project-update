@@ -4,43 +4,39 @@ import time
 from openai import OpenAI
 
 # ────────────────────────────────────────────────────────────────────────────────
-# PAGE CONFIGURATION (MUST BE FIRST)
+# PAGE CONFIGURATION
 # ────────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Foolish Persona Portal", layout="centered", page_icon="🃏")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Custom CSS
+# CUSTOM CSS
 # ────────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .stButton>button{border:1px solid #485cc7;border-radius:8px;width:100%}
-    /* Chat bubbles for the debate/chat history */
     .chat-bubble {
         padding: 15px; border-radius: 10px; margin-bottom: 10px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     .user-bubble { background-color: #f0f2f6; border-left: 5px solid #485cc7; }
     .bot-bubble { background-color: #e3f6d8; border-left: 5px solid #43B02A; }
-    
-    /* Persona Card Style */
-    .persona-card {
-        border: 1px solid #ddd; padding: 10px; border-radius: 8px; text-align: center; margin-bottom: 10px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Session State Initialisation
+# SESSION STATE
 # ────────────────────────────────────────────────────────────────────────────────
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history: dict[str, list[tuple[str, str]]] = {}
+    st.session_state.chat_history = {}
 if "debate_history" not in st.session_state:
     st.session_state.debate_history = []
-if "question_input" not in st.session_state:
-    st.session_state.question_input = ""
+if "marketing_topic" not in st.session_state:
+    st.session_state.marketing_topic = "Subject: 3 AI Stocks better than Nvidia. Urgent Buy Alert!"
+if "suggested_rewrite" not in st.session_state:
+    st.session_state.suggested_rewrite = ""
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Load Data & Patching
+# DATA LOADING
 # ────────────────────────────────────────────────────────────────────────────────
 @st.cache_data
 def load_and_patch_data():
@@ -69,18 +65,11 @@ def load_and_patch_data():
 persona_data_raw, all_personas_flat = load_and_patch_data()
 
 # ────────────────────────────────────────────────────────────────────────────────
-# OpenAI Client
+# OPENAI CLIENT
 # ────────────────────────────────────────────────────────────────────────────────
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Helper Functions
-# ────────────────────────────────────────────────────────────────────────────────
 def query_llm(messages, model="gpt-4o"): 
-    """
-    Wrapper for OpenAI call. 
-    Defaults to 'gpt-4o' for best balance of speed and roleplay capability.
-    """
     try:
         completion = client.chat.completions.create(model=model, messages=messages)
         return completion.choices[0].message.content.strip()
@@ -88,7 +77,7 @@ def query_llm(messages, model="gpt-4o"):
         return f"Error: {str(e)}"
 
 # ────────────────────────────────────────────────────────────────────────────────
-# MAIN APP UI
+# MAIN UI
 # ────────────────────────────────────────────────────────────────────────────────
 st.title("🧠 The Foolish Synthetic Audience")
 
@@ -102,22 +91,17 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ────────────────────────────────────────────────────────────────────────────────
-# TABS
-# ────────────────────────────────────────────────────────────────────────────────
 tab1, tab2 = st.tabs(["🗣️ Individual Interview", "⚔️ Focus Group Debate"])
 
 # ================================================================================
 # TAB 1: INDIVIDUAL INTERVIEW
 # ================================================================================
 with tab1:
-    # 1. SEGMENT FILTER
     segments = sorted(list({p["segment"] for p in all_personas_flat}))
     selected_segment = st.selectbox("Filter by Segment", ["All"] + segments)
     
     filtered_list = all_personas_flat if selected_segment == "All" else [p for p in all_personas_flat if p["segment"] == selected_segment]
 
-    # 2. GRID DISPLAY
     st.markdown("### 👥 Select a Persona")
     cols = st.columns(3)
     
@@ -134,7 +118,6 @@ with tab1:
                     st.session_state.selected_segment = entry["segment"]
                     st.rerun()
 
-    # 3. SELECTED PROFILE VIEW
     if "selected_persona" in st.session_state:
         p = st.session_state.selected_persona
         seg = st.session_state.selected_segment
@@ -145,13 +128,11 @@ with tab1:
             <div style="background:#e3f6d8;padding:20px;border-left:6px solid #43B02A;border-radius:10px">
                 <h4 style="margin-top:0">{p['name']} <span style="font-weight:normal">({seg})</span></h4>
                 <p><strong>Age:</strong> {p.get('age')} | <strong>Loc:</strong> {p.get('location')}</p>
-                <p><strong>Values:</strong> {', '.join(p.get('values', []))}</p>
                 <p><strong>Narrative:</strong> {p['narrative']}</p>
             </div>""",
             unsafe_allow_html=True,
         )
 
-        # 4. CHAT INTERFACE
         st.markdown("### 💬 Ask a Question")
         user_input = st.text_area("Enter your question:", key="q_input")
         
@@ -186,7 +167,7 @@ with tab1:
 
 
 # ================================================================================
-# TAB 2: FOCUS GROUP DEBATE (REALISTIC TUNING)
+# TAB 2: FOCUS GROUP DEBATE (With "Deep Psychology" Update)
 # ================================================================================
 with tab2:
     st.header("⚔️ Marketing Focus Group")
@@ -202,42 +183,44 @@ with tab2:
     with c3:
         st.info("🔥 Mode: Adversarial Stress Test")
 
-    marketing_topic = st.text_area("Marketing Headline / Copy", 
-                                   value="Subject: 3 AI Stocks better than Nvidia. Urgent Buy Alert!",
-                                   height=100)
+    # Text Area bound to session state so we can update it programmatically
+    marketing_topic = st.text_area(
+        "Marketing Headline / Copy", 
+        key="marketing_topic"
+    )
     
     if st.button("🚀 Start Focus Group", type="primary"):
         st.session_state.debate_history = []
+        st.session_state.suggested_rewrite = "" # Reset previous rewrite
+        
         p_a = persona_options[p1_key]
         p_b = persona_options[p2_key]
 
         # ────────────────────────────────────────────────────────────────────────
-        # PROMPTS (REALISTIC EMOTION)
+        # EMOTIONAL PROMPTS
         # ────────────────────────────────────────────────────────────────────────
         base_instruction = (
             "IMPORTANT: This is a simulation for marketing research. "
             "You are roleplaying a real investor. Be conversational, not a caricature. "
-            "Do NOT be polite just to be nice, but do NOT be cartoonishly aggressive. "
-            "Speak as if you are commenting on a Reddit thread or talking to a friend."
+            "Do NOT be polite just to be nice. Speak as if commenting on Reddit."
         )
 
         role_a = (
             f"ROLE: You are {p_a['name']}. "
-            f"CONTEXT: You missed the Nvidia rally and you feel a deep, anxious FOMO (Fear Of Missing Out). "
-            f"You desperately WANT this headline '{marketing_topic}' to be true because you need a 'second chance' at wealth. "
-            "You feel defensive when people question it because you don't want to feel foolish for believing it. "
-            "You are trying to convince yourself as much as the other person."
+            f"CONTEXT: You missed the Nvidia rally and you feel a deep, anxious FOMO. "
+            f"You desperately WANT this headline to be true because you need a 'second chance' at wealth. "
+            "You feel defensive when people question it. You are trying to convince yourself as much as the other person."
         )
 
         role_b = (
             f"ROLE: You are {p_b['name']}. "
             f"CONTEXT: You are weary of hype. You've seen friends lose money on 'Hot Tips' before. "
-            f"You aren't angry, just cynical. You view the headline '{marketing_topic}' as a probable trap for gullible people. "
+            f"You aren't angry, just cynical. You view this headline as a probable trap. "
             "You are trying to be the voice of reason. You are calm but firm that this is dangerous."
         )
 
         # ────────────────────────────────────────────────────────────────────────
-        # THE LOOP
+        # THE DEBATE LOOP
         # ────────────────────────────────────────────────────────────────────────
         chat_container = st.container()
         
@@ -245,7 +228,7 @@ with tab2:
             st.markdown(f"**Topic:** *{marketing_topic}*")
             st.divider()
             
-            # 1. BULL SPEAKS (Anxious Hope)
+            # 1. BULL SPEAKS
             msg_a = query_llm([
                 {"role": "system", "content": base_instruction + "\n" + role_a},
                 {"role": "user", "content": f"React to this headline: '{marketing_topic}'."}
@@ -254,7 +237,7 @@ with tab2:
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a}")
             time.sleep(1)
 
-            # 2. BEAR RESPONDS (Weary Cynicism)
+            # 2. BEAR RESPONDS
             msg_b = query_llm([
                 {"role": "system", "content": base_instruction + "\n" + role_b},
                 {"role": "user", "content": f"The headline is '{marketing_topic}'. {p_a['name']} just said: '{msg_a}'. Give them a reality check."}
@@ -263,7 +246,7 @@ with tab2:
             st.markdown(f"**{p_b['name']} (The Skeptic)**: {msg_b}")
             time.sleep(1)
 
-            # 3. BULL RETORTS (Defensive Justification)
+            # 3. BULL RETORTS
             msg_a_2 = query_llm([
                 {"role": "system", "content": base_instruction + "\n" + role_a},
                 {"role": "user", "content": f"You just got critiqued. {p_b['name']} said: '{msg_b}'. Explain why you think THIS time is different."}
@@ -271,24 +254,71 @@ with tab2:
             st.session_state.debate_history.append({"name": p_a["name"], "text": msg_a_2})
             st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a_2}")
 
-            # 4. MODERATOR SUMMARY
+            # ────────────────────────────────────────────────────────────────────
+            # MODERATOR (IMPROVED PROMPT)
+            # ────────────────────────────────────────────────────────────────────
             st.divider()
-            st.subheader("📊 Moderator Insight")
-            with st.spinner("Analyzing friction points..."):
+            st.subheader("📊 Strategic Analysis")
+            with st.spinner("Analyzing the deep psychology..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
                 
+                # UPDATED PROMPT: Focused on Psychology & "Foolish" Tone
                 mod_prompt = f"""
-                Analyze this conflict between a 'Believer' and a 'Skeptic' regarding the marketing subject line: "{marketing_topic}".
+                You are a world-class Direct Response Copywriter and Behavioral Psychologist. 
+                Do not just summarize the text. Analyze the subtext.
                 
                 TRANSCRIPT:
                 {transcript}
                 
-                TASK:
-                1. Identify the specific word or phrase that triggered the Skeptic's cynicism.
-                2. Identify the emotional hook that grabbed the Believer (was it greed, fear, or redemption?).
-                3. Rewrite the subject line to keep the Believer's interest but lower the Skeptic's defenses.
+                MARKETING HOOK: "{marketing_topic}"
+                
+                PROVIDE THIS REPORT:
+                
+                1. THE "REAL" WHY (Psychology):
+                Ignore the surface excitement. What is the *actual* emotion driving the Believer? 
+                (Is it Redemption for past mistakes? Status? Greed? Revenge against the market?)
+                
+                2. THE TRUST GAP (Objection):
+                What specifically made the Skeptic bail? Was it a specific word (like "Urgent") or a logical hole (like "Why is this secret?")?
+                
+                3. THE "FOOLISH" REWRITE:
+                Rewrite the headline.
+                - RULES: Be punchy, contrarian, and conversational (Motley Fool style). 
+                - Do NOT be corporate or boring. 
+                - Address the "Real Why" while fixing the "Trust Gap".
+                - Output ONLY the rewrite in bold for the final line.
                 """
                 
-                summary = query_llm([{"role": "system", "content": "You are a direct response marketing expert."}, 
+                summary = query_llm([{"role": "system", "content": "You are a legendary marketing strategist."}, 
                                      {"role": "user", "content": mod_prompt}])
                 st.info(summary)
+                
+                # Extract the rewrite roughly (assuming the LLM follows instructions to bold it or put it at end)
+                # We save it to session state to allow the user to loop it.
+                st.session_state.suggested_rewrite = summary 
+
+    # ────────────────────────────────────────────────────────────────────────
+    # FEEDBACK LOOP BUTTON
+    # ────────────────────────────────────────────────────────────────────────
+    if st.session_state.debate_history and st.session_state.suggested_rewrite:
+        st.markdown("---")
+        st.markdown("### 🔄 Iterate")
+        st.write("Want to test the Moderator's suggestion? Click below to load it into the input box and re-run the debate.")
+        
+        col_a, col_b = st.columns([1, 4])
+        with col_a:
+            if st.button("Test Rewrite"):
+                # Logic to parse the bold text or just take the whole summary? 
+                # For simplicity, we ask the user to copy-paste OR we can try to extract just the headline.
+                # Let's just update the box and let the user edit if needed.
+                
+                # Try to extract the bolded part if possible, otherwise paste full summary
+                new_topic = st.session_state.suggested_rewrite
+                if "**" in new_topic:
+                    # Simple extraction of bold text
+                    parts = new_topic.split("**")
+                    if len(parts) >= 2:
+                        new_topic = parts[1] # Take the content between first set of bolds
+                
+                st.session_state.marketing_topic = new_topic
+                st.rerun()
