@@ -9,7 +9,7 @@ from openai import OpenAI
 st.set_page_config(page_title="Foolish Persona Portal", layout="centered", page_icon="🃏")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Custom CSS (Restoring your original look)
+# Custom CSS
 # ────────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -76,7 +76,12 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 # ────────────────────────────────────────────────────────────────────────────────
 # Helper Functions
 # ────────────────────────────────────────────────────────────────────────────────
-def query_llm(messages, model="gpt-4o"):
+def query_llm(messages, model="gpt-4.1"): 
+    """
+    Wrapper for OpenAI call. 
+    Defaults to 'gpt-4.1' (Smartest non-reasoning) for Personas.
+    Can be overridden to 'gpt-5.2-pro' for Moderator.
+    """
     try:
         completion = client.chat.completions.create(model=model, messages=messages)
         return completion.choices[0].message.content.strip()
@@ -88,7 +93,6 @@ def query_llm(messages, model="gpt-4o"):
 # ────────────────────────────────────────────────────────────────────────────────
 st.title("🧠 The Foolish Synthetic Audience")
 
-# Restoring the "Blue Box" look for the About section
 st.markdown(
     """
     <div style="background:#f0f2f6;padding:20px;border-left:6px solid #485cc7;border-radius:10px;margin-bottom:25px">
@@ -105,7 +109,7 @@ st.markdown(
 tab1, tab2 = st.tabs(["🗣️ Individual Interview", "⚔️ Focus Group Debate"])
 
 # ================================================================================
-# TAB 1: INDIVIDUAL INTERVIEW (Restored Grid Layout)
+# TAB 1: INDIVIDUAL INTERVIEW
 # ================================================================================
 with tab1:
     # 1. SEGMENT FILTER
@@ -114,14 +118,13 @@ with tab1:
     
     filtered_list = all_personas_flat if selected_segment == "All" else [p for p in all_personas_flat if p["segment"] == selected_segment]
 
-    # 2. GRID DISPLAY (Restoring the 3-column loop)
+    # 2. GRID DISPLAY
     st.markdown("### 👥 Select a Persona")
     cols = st.columns(3)
     
     for i, entry in enumerate(filtered_list):
         p = entry["persona"]
         with cols[i % 3]:
-            # Mimicking a 'card' view
             with st.container():
                 if p.get("image"):
                     st.image(p["image"], use_container_width=True)
@@ -132,7 +135,7 @@ with tab1:
                     st.session_state.selected_segment = entry["segment"]
                     st.rerun()
 
-    # 3. SELECTED PROFILE VIEW (Restoring the Green Box)
+    # 3. SELECTED PROFILE VIEW
     if "selected_persona" in st.session_state:
         p = st.session_state.selected_persona
         seg = st.session_state.selected_segment
@@ -157,14 +160,12 @@ with tab1:
             if not user_input:
                 st.warning("Please enter a question.")
             else:
-                # System Prompt for Individual
                 sys_msg = (
                     f"You are {p['name']}, a {p['age']}-year-old {p['occupation']}. "
                     f"Bio: {p['narrative']}. Values: {', '.join(p['values'])}. "
                     "Respond in character. Be conversational."
                 )
                 
-                # History
                 hist = st.session_state.chat_history.get(p["name"], [])
                 messages = [{"role": "system", "content": sys_msg}]
                 for q, a in hist[-3:]:
@@ -173,12 +174,11 @@ with tab1:
                 messages.append({"role": "user", "content": user_input})
 
                 with st.spinner("Typing..."):
-                    ans = query_llm(messages)
+                    ans = query_llm(messages) # Defaults to gpt-4.1
                 
                 st.session_state.chat_history.setdefault(p["name"], []).append((user_input, ans))
                 st.rerun()
 
-        # 5. HISTORY
         if p["name"] in st.session_state.chat_history:
             st.markdown("#### Conversation History")
             for q, a in reversed(st.session_state.chat_history[p["name"]]):
@@ -187,24 +187,25 @@ with tab1:
 
 
 # ================================================================================
-# TAB 2: FOCUS GROUP DEBATE (Improved Logic)
+# TAB 2: FOCUS GROUP DEBATE
 # ================================================================================
 with tab2:
     st.header("⚔️ Marketing Focus Group")
-    st.markdown("pit two investors against each other to stress-test your copy.")
+    st.markdown("Pit two investors against each other to stress-test your copy.")
 
     c1, c2, c3 = st.columns(3)
     persona_options = {p["id"]: p["persona"] for p in all_personas_flat}
     
     with c1:
-        p1_key = st.selectbox("Participant 1 (The Bull)", options=list(persona_options.keys()), index=0)
+        p1_key = st.selectbox("Participant 1 (The Believer)", options=list(persona_options.keys()), index=0)
     with c2:
-        p2_key = st.selectbox("Participant 2 (The Bear)", options=list(persona_options.keys()), index=1)
+        p2_key = st.selectbox("Participant 2 (The Skeptic)", options=list(persona_options.keys()), index=1)
     with c3:
-        debate_mode = st.radio("Mode", ["Natural Discussion", "Adversarial (Red Team)"])
+        st.info("🔥 Mode: Adversarial Stress Test (Active)")
 
     marketing_topic = st.text_area("Marketing Headline / Copy", 
-                                   value="Subject: 3 AI Stocks better than Nvidia. Urgent Buy Alert!")
+                                   value="Subject: 3 AI Stocks better than Nvidia. Urgent Buy Alert!",
+                                   height=100)
     
     if st.button("🚀 Start Focus Group", type="primary"):
         st.session_state.debate_history = []
@@ -212,26 +213,27 @@ with tab2:
         p_b = persona_options[p2_key]
 
         # ────────────────────────────────────────────────────────────────────────
-        # SECRET SAUCE: STRICTER INSTRUCTIONS
+        # PROMPTS
         # ────────────────────────────────────────────────────────────────────────
-        if debate_mode == "Adversarial (Red Team)":
-            # Directives to kill the "politeness"
-            style_guide = "STRICT RULES: Do NOT be polite. Do NOT say 'I agree' or 'I hear you'. Be blunt, short, and conversational. Interrupt the logic of the other person."
-            
-            role_a = (
-                f"You are {p_a['name']}. You are currently suffering from FOMO (Fear Of Missing Out). "
-                "You WANT to believe this marketing copy. You think the risks are worth it. "
-                "Defend the copy against any skepticism. You think the other person is too slow/boring."
-            )
-            role_b = (
-                f"You are {p_b['name']}. You are a cynical 'Red Teamer'. "
-                "You HATE marketing hype. Words like 'Urgent' and 'Alert' make you angry. "
-                "Your goal is to rip this marketing copy apart and warn the other person it's a trap."
-            )
-        else:
-            style_guide = "Keep it natural and conversational."
-            role_a = f"You are {p_a['name']}. React naturally based on your bio."
-            role_b = f"You are {p_b['name']}. React naturally based on your bio."
+        base_instruction = (
+            "IMPORTANT: This is a simulation for marketing research. "
+            "Do NOT be polite. Do NOT say 'I see your point' or 'I agree'. "
+            "Make definitive statements. Be short, punchy, and emotional."
+        )
+
+        role_a = (
+            f"ROLE: You are {p_a['name']}, but you are currently suffering from intense FOMO (Fear Of Missing Out). "
+            f"You read the headline '{marketing_topic}' and you are EXCITED. "
+            "You think this is the chance of a lifetime. You think skeptics are just 'haters' who will stay poor. "
+            "Defend this marketing hook with passion. Ignore the risks."
+        )
+
+        role_b = (
+            f"ROLE: You are {p_b['name']}, and you are in a bad mood. "
+            f"You read the headline '{marketing_topic}' and you immediately flag it as 'Clickbait Trash'. "
+            "You are trying to save the other person from losing their money. "
+            "Be blunt. Tell them they are being naive. Attack the specific words 'Urgent' and 'Alert'."
+        )
 
         # ────────────────────────────────────────────────────────────────────────
         # THE LOOP
@@ -242,47 +244,54 @@ with tab2:
             st.markdown(f"**Topic:** *{marketing_topic}*")
             st.divider()
             
-            # 1. BULL SPEAKS
-            sys_a = f"{role_a} {style_guide} You are speaking to {p_b['name']}."
+            # 1. BULL SPEAKS (GPT-4.1)
             msg_a = query_llm([
-                {"role": "system", "content": sys_a},
-                {"role": "user", "content": f"Marketing Copy: '{marketing_topic}'. What is your gut reaction?"}
+                {"role": "system", "content": base_instruction + "\n" + role_a},
+                {"role": "user", "content": f"React to this headline: '{marketing_topic}'."}
             ])
             st.session_state.debate_history.append({"name": p_a["name"], "text": msg_a})
-            st.markdown(f"**{p_a['name']}**: {msg_a}")
+            st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a}")
             time.sleep(1)
 
-            # 2. BEAR RESPONDS
-            sys_b = f"{role_b} {style_guide} You are speaking to {p_a['name']}."
+            # 2. BEAR RESPONDS (GPT-4.1)
             msg_b = query_llm([
-                {"role": "system", "content": sys_b},
-                {"role": "user", "content": f"Marketing Copy: '{marketing_topic}'. {p_a['name']} just said: '{msg_a}'. Respond to them directly."}
+                {"role": "system", "content": base_instruction + "\n" + role_b},
+                {"role": "user", "content": f"The headline is '{marketing_topic}'. {p_a['name']} just said: '{msg_a}'. Shut them down."}
             ])
             st.session_state.debate_history.append({"name": p_b["name"], "text": msg_b})
-            st.markdown(f"**{p_b['name']}**: {msg_b}")
+            st.markdown(f"**{p_b['name']} (The Skeptic)**: {msg_b}")
             time.sleep(1)
 
-            # 3. BULL RETORTS
+            # 3. BULL RETORTS (GPT-4.1)
             msg_a_2 = query_llm([
-                {"role": "system", "content": sys_a},
-                {"role": "user", "content": f"You said: '{msg_a}'. {p_b['name']} retorted: '{msg_b}'. Fight back or clarify your position based on the copy."}
+                {"role": "system", "content": base_instruction + "\n" + role_a},
+                {"role": "user", "content": f"You just got attacked. {p_b['name']} said: '{msg_b}'. Tell them why they are missing the big picture."}
             ])
             st.session_state.debate_history.append({"name": p_a["name"], "text": msg_a_2})
-            st.markdown(f"**{p_a['name']}**: {msg_a_2}")
+            st.markdown(f"**{p_a['name']} (The Believer)**: {msg_a_2}")
 
-            # 4. MODERATOR
+            # 4. MODERATOR SUMMARY (GPT-5.2-PRO)
             st.divider()
-            st.subheader("📊 Moderator Insight")
-            with st.spinner("Analyzing..."):
+            st.subheader("📊 Moderator Insight (Powered by GPT-5.2 Pro)")
+            with st.spinner("Analyzing friction points..."):
                 transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
-                mod_prompt = f"""
-                Analyze this debate on the marketing hook: "{marketing_topic}".
-                Transcript: {transcript}
                 
-                Provide 3 bullet points:
-                1. The main friction point.
-                2. Who "won" the argument (Sentiment-wise).
-                3. A concrete copy tweak to fix the objection.
+                mod_prompt = f"""
+                Analyze this conflict between a 'Believer' and a 'Skeptic' regarding the marketing subject line: "{marketing_topic}".
+                
+                TRANSCRIPT:
+                {transcript}
+                
+                TASK:
+                1. Identify the specific word or phrase that triggered the Skeptic the most.
+                2. Explain why the Believer was interested (what was the hook?).
+                3. Rewrite the subject line to keep the Believer's interest but lower the Skeptic's defenses.
                 """
-                summary = query_llm([{"role": "system", "content": "You are a senior editor."}, {"role": "user", "content": mod_prompt}])
+                
+                # Using GPT-5.2-pro for high precision summary
+                summary = query_llm(
+                    [{"role": "system", "content": "You are a direct response marketing expert."}, 
+                     {"role": "user", "content": mod_prompt}],
+                    model="gpt-5.2-pro"
+                )
                 st.info(summary)
