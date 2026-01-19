@@ -2,6 +2,7 @@ import os
 import json
 import re
 import time
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -19,15 +20,15 @@ except Exception:  # pragma: no cover
     genai = None
 
 
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # PAGE CONFIGURATION
-# ────────────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Foolish Persona Portal", layout="centered", page_icon="🃏")
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="Foolish Persona Portal", layout="centered", page_icon="F")
 
 
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # CUSTOM CSS
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 st.markdown(
     """
 <style>
@@ -39,15 +40,16 @@ st.markdown(
     .user-bubble { background-color: #f0f2f6; border-left: 5px solid #485cc7; }
     .bot-bubble { background-color: #e3f6d8; border-left: 5px solid #43B02A; }
     .small-muted { color: #53565A; font-size: 0.9rem; }
+    code { white-space: pre-wrap !important; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
 
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # HELPERS
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 DASH_CHARS = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
 
 
@@ -60,6 +62,14 @@ def slugify(s: str) -> str:
     s = s.lower()
     s = re.sub(r"[^a-z0-9]+", "_", s)
     return s.strip("_")
+
+
+def _ensure_dict(x: Any) -> Dict[str, Any]:
+    return x if isinstance(x, dict) else {}
+
+
+def _ensure_list(x: Any) -> List[Any]:
+    return x if isinstance(x, list) else []
 
 
 def first_present(*values: Optional[str]) -> Optional[str]:
@@ -84,6 +94,58 @@ def extract_json_object(text: str) -> Optional[dict]:
         return None
 
 
+def sha256_text(s: str) -> str:
+    return hashlib.sha256((s or "").encode("utf-8")).hexdigest()
+
+
+def word_count(text: str) -> int:
+    if not text:
+        return 0
+    return len(re.findall(r"\S+", text))
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate (English): ~4 chars per token."""
+    if not text:
+        return 0
+    return max(1, int(len(text) / 4))
+
+
+def truncate_to_words(text: str, max_words: int) -> str:
+    if not text:
+        return ""
+    if max_words <= 0:
+        return ""
+    words = re.findall(r"\S+", text)
+    if len(words) <= max_words:
+        return text.strip()
+    return " ".join(words[:max_words]).strip() + "\n\n[...truncated...]"
+
+
+def strip_common_email_footer(text: str) -> str:
+    """Best-effort removal of common email boilerplate (unsubscribe/legal/footer)."""
+    if not text:
+        return ""
+    lines = text.splitlines()
+    patterns = [
+        r"(?i)\bunsubscribe\b",
+        r"(?i)\bmanage preferences\b",
+        r"(?i)\bprivacy policy\b",
+        r"(?i)\bterms\b",
+        r"(?i)\bview in (a )?browser\b",
+        r"(?i)^\s*copyright\b",
+        r"(?i)^\s*\u00a9\b",  # may appear in text; safe in regex
+        r"(?i)\bdisclaimer\b",
+        r"(?i)\bthis email\b",
+    ]
+
+    for i, line in enumerate(lines):
+        if any(re.search(p, line) for p in patterns):
+            trimmed = "\n".join(lines[:i]).strip()
+            return trimmed if trimmed else text.strip()
+    return text.strip()
+
+
 def claim_risk_flags(text: str) -> List[str]:
     """Very lightweight claim-risk heuristic for marketing copy."""
     if not text:
@@ -102,9 +164,272 @@ def claim_risk_flags(text: str) -> List[str]:
     return hits
 
 
-# ────────────────────────────────────────────────────────────────────────────────
+def format_brief_summary(brief: Dict[str, Any]) -> str:
+    """Convert extracted brief JSON into a compact, human-readable summary."""
+    if not isinstance(brief, dict):
+        return ""
+
+    def _join(xs: Any, n: int = 6) -> str:
+        xs = _ensure_list(xs)
+        xs = [str(x).strip() for x in xs if str(x).strip()]
+        return "; ".join(xs[:n])
+
+    primary_promise = brief.get("primary_promise") or brief.get("promise") or ""
+    offer = brief.get("offer_summary") or brief.get("offer") or ""
+    cta = brief.get("cta") or ""
+    key_claims = _join(brief.get("key_claims"), 8)
+    proof = _join(brief.get("proof_elements"), 8)
+    missing = _join(brief.get("missing_proof"), 8)
+
+    bits: List[str] = []
+    if primary_promise:
+        bits.append(f"Primary promise: {primary_promise}")
+    if offer:
+        bits.append(f"Offer: {offer}")
+    if cta:
+        bits.append(f"CTA: {cta}")
+    if key_claims:
+        bits.append(f"Key claims: {key_claims}")
+    if proof:
+        bits.append(f"Proof present: {proof}")
+    if missing:
+        bits.append(f"Missing proof: {missing}")
+
+    return "\n".join(bits).strip()
+
+
+def build_brief_prompt(copy_type: str, text: str, truncated_note: str) -> str:
+    """Prompt to extract a structured creative brief from pasted copy."""
+    copy_type = copy_type or "Other"
+    return f"""
+You are a senior conversion copy strategist.
+
+TASK:
+Extract a structured brief from the marketing creative provided below. This brief will be used to run a synthetic focus group.
+
+RULES:
+- Return ONLY a single JSON object. No markdown. No commentary.
+- Do NOT invent facts. If something is missing, say it is missing.
+- Be concise. Use short strings. Lists should be short.
+- If the creative is long, try to detect sections and summarise them.
+
+COPY TYPE (declared by user): {copy_type}
+TRUNCATION NOTE: {truncated_note}
+
+OUTPUT JSON SCHEMA:
+{{
+  "copy_type": "{copy_type}",
+  "primary_promise": "...",
+  "offer_summary": "...",
+  "cta": "...",
+  "audience_assumed": "...",
+  "tone": ["..."],
+  "key_claims": ["..."],
+  "proof_elements": ["..."],
+  "missing_proof": ["..."],
+  "risk_flags": ["..."],
+  "sections": [
+    {{"section": "Hero/Subject/Hook", "summary": "...", "start_quote": "..."}},
+    {{"section": "Offer", "summary": "...", "start_quote": "..."}}
+  ]
+}}
+
+MARKETING CREATIVE:
+{text}
+""".strip()
+
+
+def moderator_schema_example(copy_type: str) -> str:
+    ct = (copy_type or "Other").strip()
+
+    if ct == "Headline":
+        return (
+            "{\n"
+            "  \"copy_type\": \"Headline\",\n"
+            "  \"scope\": {\"mode\": \"...\", \"note\": \"...\"},\n"
+            "  \"executive_summary\": \"...\",\n"
+            "  \"real_why\": \"...\",\n"
+            "  \"trust_gap\": \"...\",\n"
+            "  \"key_objections\": [\"...\"],\n"
+            "  \"proof_needed\": [\"...\"],\n"
+            "  \"risk_flags\": [\"...\"],\n"
+            "  \"actionable_fixes\": [\"...\"],\n"
+            "  \"rewrite\": {\n"
+            "    \"headlines\": [\"...\"],\n"
+            "    \"supporting_lines\": [\"...\"],\n"
+            "    \"angle_notes\": \"...\"\n"
+            "  }\n"
+            "}"
+        )
+
+    if ct == "Email":
+        return (
+            "{\n"
+            "  \"copy_type\": \"Email\",\n"
+            "  \"scope\": {\"mode\": \"...\", \"note\": \"...\"},\n"
+            "  \"executive_summary\": \"...\",\n"
+            "  \"real_why\": \"...\",\n"
+            "  \"trust_gap\": \"...\",\n"
+            "  \"key_objections\": [\"...\"],\n"
+            "  \"proof_needed\": [\"...\"],\n"
+            "  \"confusing_phrases\": [\"...\"],\n"
+            "  \"risk_flags\": [\"...\"],\n"
+            "  \"actionable_fixes\": [\"...\"],\n"
+            "  \"rewrite\": {\n"
+            "    \"subject\": \"...\",\n"
+            "    \"preheader\": \"...\",\n"
+            "    \"body\": \"...\",\n"
+            "    \"cta\": \"...\",\n"
+            "    \"ps\": \"...\"\n"
+            "  }\n"
+            "}"
+        )
+
+    if ct == "Sales Page":
+        return (
+            "{\n"
+            "  \"copy_type\": \"Sales Page\",\n"
+            "  \"scope\": {\"mode\": \"...\", \"note\": \"...\"},\n"
+            "  \"executive_summary\": \"...\",\n"
+            "  \"real_why\": \"...\",\n"
+            "  \"trust_gap\": \"...\",\n"
+            "  \"key_objections\": [\"...\"],\n"
+            "  \"proof_needed\": [\"...\"],\n"
+            "  \"risk_flags\": [\"...\"],\n"
+            "  \"actionable_fixes\": [\"...\"],\n"
+            "  \"section_feedback\": [\n"
+            "    {\"section\": \"Hero\", \"what_works\": \"...\", \"what_fails\": \"...\", \"fix\": \"...\"}\n"
+            "  ],\n"
+            "  \"rewrite\": {\n"
+            "    \"hero_headline\": \"...\",\n"
+            "    \"hero_subheadline\": \"...\",\n"
+            "    \"bullets\": [\"...\"],\n"
+            "    \"proof_block\": \"...\",\n"
+            "    \"offer_stack\": [\"...\"],\n"
+            "    \"cta_button\": \"...\",\n"
+            "    \"cta_line\": \"...\"\n"
+            "  }\n"
+            "}"
+        )
+
+    return (
+        "{\n"
+        "  \"copy_type\": \"Other\",\n"
+        "  \"scope\": {\"mode\": \"...\", \"note\": \"...\"},\n"
+        "  \"executive_summary\": \"...\",\n"
+        "  \"real_why\": \"...\",\n"
+        "  \"trust_gap\": \"...\",\n"
+        "  \"key_objections\": [\"...\"],\n"
+        "  \"proof_needed\": [\"...\"],\n"
+        "  \"risk_flags\": [\"...\"],\n"
+        "  \"actionable_fixes\": [\"...\"],\n"
+        "  \"rewrite\": {\n"
+        "    \"headline\": \"...\",\n"
+        "    \"body\": \"...\"\n"
+        "  }\n"
+        "}"
+    )
+
+
+def format_rewrite_as_text(mj: Dict[str, Any]) -> str:
+    if not isinstance(mj, dict):
+        return ""
+
+    copy_type = mj.get("copy_type") or st.session_state.get("copy_type") or "Other"
+    rw = _ensure_dict(mj.get("rewrite"))
+
+    if copy_type == "Headline":
+        heads = _ensure_list(rw.get("headlines"))
+        if heads:
+            # Use the first headline as the active creative, but keep the rest visible in moderator panel.
+            return str(heads[0]).strip()
+        head = rw.get("headline")
+        return str(head).strip() if head else ""
+
+    if copy_type == "Email":
+        subject = first_present(rw.get("subject"), rw.get("Subject"))
+        preheader = first_present(rw.get("preheader"), rw.get("pre_header"), rw.get("preview"))
+        body = first_present(rw.get("body"), rw.get("email_body"))
+        cta = first_present(rw.get("cta"), rw.get("call_to_action"))
+        ps = first_present(rw.get("ps"), rw.get("P.S."), rw.get("p.s."))
+
+        parts: List[str] = []
+        if subject:
+            parts.append(f"Subject: {str(subject).strip()}")
+        if preheader:
+            parts.append(f"Preheader: {str(preheader).strip()}")
+        if body:
+            parts.append("\n" + str(body).strip())
+        if cta:
+            parts.append("\nCTA: " + str(cta).strip())
+        if ps:
+            parts.append("\nP.S. " + str(ps).strip())
+        return "\n".join([p for p in parts if p]).strip()
+
+    if copy_type == "Sales Page":
+        hero_h1 = first_present(rw.get("hero_headline"), rw.get("h1"))
+        hero_sub = first_present(rw.get("hero_subheadline"), rw.get("subheadline"), rw.get("subhead"))
+        bullets = _ensure_list(rw.get("bullets"))
+        proof = first_present(rw.get("proof_block"), rw.get("proof_section"), rw.get("proof"))
+        offer_stack = _ensure_list(rw.get("offer_stack"))
+        cta_button = first_present(rw.get("cta_button"), rw.get("button"))
+        cta_line = first_present(rw.get("cta_line"), rw.get("cta"))
+
+        out: List[str] = []
+        if hero_h1:
+            out.append(str(hero_h1).strip())
+        if hero_sub:
+            out.append(str(hero_sub).strip())
+
+        if bullets:
+            out.append("\nKey bullets:")
+            for b in bullets[:8]:
+                out.append(f"- {str(b).strip()}")
+
+        if proof:
+            out.append("\nProof block:")
+            out.append(str(proof).strip())
+
+        if offer_stack:
+            out.append("\nOffer stack:")
+            for o in offer_stack[:10]:
+                out.append(f"- {str(o).strip()}")
+
+        if cta_button or cta_line:
+            out.append("\nCTA:")
+            if cta_button:
+                out.append(f"Button: {str(cta_button).strip()}")
+            if cta_line:
+                out.append(str(cta_line).strip())
+
+        return "\n".join(out).strip()
+
+    # Other/mixed
+    subject = rw.get("subject")
+    body = rw.get("body")
+    headline = rw.get("headline")
+    text = rw.get("text")
+
+    if subject or body:
+        parts: List[str] = []
+        if subject:
+            parts.append(f"Subject: {str(subject).strip()}")
+        if body:
+            parts.append(str(body).strip())
+        return "\n\n".join([p for p in parts if p]).strip()
+
+    if headline and text:
+        return f"{str(headline).strip()}\n\n{str(text).strip()}".strip()
+
+    if text:
+        return str(text).strip()
+
+    return ""
+
+
+# -----------------------------------------------------------------------------
 # SESSION STATE
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 if "chat_history" not in st.session_state:
     # key: persona_uid -> list[(q, a)]
     st.session_state.chat_history = {}
@@ -126,10 +451,36 @@ if "question_input" not in st.session_state:
 if "selected_persona_uid" not in st.session_state:
     st.session_state.selected_persona_uid = None
 
+# New: copy format + scope controls
+if "copy_type" not in st.session_state:
+    st.session_state.copy_type = "Email"
+if "scope_mode" not in st.session_state:
+    st.session_state.scope_mode = "Full text"
+if "scope_words" not in st.session_state:
+    st.session_state.scope_words = 350
+if "custom_excerpt" not in st.session_state:
+    st.session_state.custom_excerpt = ""
+if "strip_boilerplate" not in st.session_state:
+    st.session_state.strip_boilerplate = True
+if "use_brief" not in st.session_state:
+    st.session_state.use_brief = True
+if "brief_cache" not in st.session_state:
+    st.session_state.brief_cache = {}
+if "creative_brief_raw" not in st.session_state:
+    st.session_state.creative_brief_raw = ""
+if "creative_brief_json" not in st.session_state:
+    st.session_state.creative_brief_json = None
+if "creative_excerpt" not in st.session_state:
+    st.session_state.creative_excerpt = ""
+if "creative_scope_note" not in st.session_state:
+    st.session_state.creative_scope_note = ""
+if "creative_processed" not in st.session_state:
+    st.session_state.creative_processed = ""
 
-# ────────────────────────────────────────────────────────────────────────────────
+
+# -----------------------------------------------------------------------------
 # DATA LOADING
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
 
 
@@ -154,14 +505,6 @@ def find_personas_file() -> Optional[Path]:
                 return p
 
     return None
-
-
-def _ensure_dict(x: Any) -> Dict[str, Any]:
-    return x if isinstance(x, dict) else {}
-
-
-def _ensure_list(x: Any) -> List[Any]:
-    return x if isinstance(x, list) else []
 
 
 def _patch_core(core: Dict[str, Any]) -> Dict[str, Any]:
@@ -205,10 +548,10 @@ def _convert_old_schema(old: Dict[str, Any]) -> Dict[str, Any]:
     groups = _ensure_list(old.get("personas"))
 
     default_summaries = {
-        "Next Generation Investors (18–24 years)": "Tech-native, socially-conscious starters focused on building asset bases early.",
-        "Emerging Wealth Builders (25–34 years)": "Balancing house deposits, careers and investing; optimistic but wage-squeezed.",
-        "Established Accumulators (35–49 years)": "Juggling family, mortgages and wealth growth; value efficiency and advice.",
-        "Pre-Retirees (50–64 years)": "Capital-preservers planning retirement income; keen super watchers.",
+        "Next Generation Investors (18-24 years)": "Tech-native, socially-conscious starters focused on building asset bases early.",
+        "Emerging Wealth Builders (25-34 years)": "Balancing house deposits, careers and investing; optimistic but wage-squeezed.",
+        "Established Accumulators (35-49 years)": "Juggling family, mortgages and wealth growth; value efficiency and advice.",
+        "Pre-Retirees (50-64 years)": "Capital-preservers planning retirement income; keen super watchers.",
         "Retirees (65+ years)": "Stability-seekers prioritising income and low volatility.",
     }
 
@@ -217,7 +560,11 @@ def _convert_old_schema(old: Dict[str, Any]) -> Dict[str, Any]:
     for g in groups:
         label = g.get("segment", "Unknown")
         seg_id = slugify(label)
-        summary = default_summaries.get(normalize_dashes(label), "")
+
+        label_norm = normalize_dashes(label)
+        # also normalize en-dash ranges to hyphen range when matching defaults
+        label_norm = label_norm.replace("\u2013", "-")
+        summary = default_summaries.get(label_norm, "")
 
         people: List[Dict[str, Any]] = []
         for gender in ("male", "female"):
@@ -229,7 +576,18 @@ def _convert_old_schema(old: Dict[str, Any]) -> Dict[str, Any]:
             if "behavioral_enrichment" in p and "behavioural_enrichment" not in p:
                 p["behavioural_enrichment"] = p.pop("behavioral_enrichment")
 
-            core = {k: v for k, v in p.items() if k not in {"scenarios", "peer_influence", "risk_tolerance_differences", "behavioural_enrichment"}}
+            core = {
+                k: v
+                for k, v in p.items()
+                if k
+                not in {
+                    "scenarios",
+                    "peer_influence",
+                    "risk_tolerance_differences",
+                    "behavioural_enrichment",
+                    "behavioral_enrichment",
+                }
+            }
             ext = {
                 "behavioural_enrichment": p.get("behavioural_enrichment", {}),
                 "risk_tolerance_differences": p.get("risk_tolerance_differences", ""),
@@ -273,7 +631,7 @@ def load_personas() -> Tuple[Optional[Path], Dict[str, Any], List[Dict[str, Any]
         seg_label = seg.get("label", "Unknown")
         seg_summary = seg.get("summary", "")
         for persona in _ensure_list(seg.get("personas")):
-            pid = persona.get("id") or slugify(persona.get("core", {}).get("name", ""))
+            pid = persona.get("id") or slugify(_ensure_dict(persona.get("core")).get("name", ""))
             uid = f"{seg_id}:{pid}"
 
             core = _patch_core(_ensure_dict(persona.get("core")))
@@ -298,9 +656,9 @@ def load_personas() -> Tuple[Optional[Path], Dict[str, Any], List[Dict[str, Any]
 personas_path, personas_raw, segments_raw, all_personas_flat = load_personas()
 
 
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # AI CLIENTS
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _get_secret_or_env(key: str) -> Optional[str]:
     try:
@@ -411,18 +769,39 @@ def build_persona_system_prompt(core: Dict[str, Any]) -> str:
     )
 
 
+def extract_creative_brief(text_for_brief: str, copy_type: str, truncation_note: str) -> Tuple[str, Optional[dict]]:
+    """Return (raw_model_output, parsed_json_or_none). Uses session cache by hash."""
+    cache_key = sha256_text(f"{copy_type}||{truncation_note}||{text_for_brief}")
+    cache = st.session_state.get("brief_cache") or {}
+
+    if cache_key in cache:
+        raw = cache[cache_key].get("raw", "")
+        mj = cache[cache_key].get("json")
+        return raw, mj
+
+    prompt = build_brief_prompt(copy_type=copy_type, text=text_for_brief, truncated_note=truncation_note)
+    raw = query_openai(
+        [{"role": "user", "content": prompt}],
+        model=st.session_state.get("brief_model", "gpt-4o-mini"),
+        temperature=float(st.session_state.get("brief_temperature", 0.2)),
+    )
+    mj = extract_json_object(raw)
+
+    cache[cache_key] = {"raw": raw, "json": mj}
+    st.session_state.brief_cache = cache
+    return raw, mj
+
+
 def apply_rewrite_from_moderator() -> None:
     mj = st.session_state.get("moderator_json")
     if isinstance(mj, dict):
-        subject = (mj.get("rewrite", {}) or {}).get("subject")
-        body = (mj.get("rewrite", {}) or {}).get("body")
-        if subject or body:
-            merged = ""
-            if subject:
-                merged += f"Subject: {subject}\n\n"
-            if body:
-                merged += str(body).strip()
-            st.session_state.marketing_topic = merged.strip()
+        rewritten_text = format_rewrite_as_text(mj)
+        if rewritten_text:
+            st.session_state.marketing_topic = rewritten_text.strip()
+            # Keep copy type aligned if moderator specified
+            if mj.get("copy_type"):
+                st.session_state.copy_type = mj.get("copy_type")
+
             st.session_state.debate_history = []
             st.session_state.campaign_assets = None
             return
@@ -435,14 +814,14 @@ def apply_rewrite_from_moderator() -> None:
         st.session_state.campaign_assets = None
 
 
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # SIDEBAR CONFIG
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("### ⚙️ Model Settings")
+    st.markdown("### Model Settings")
 
     st.session_state.openai_model = st.selectbox(
-        "OpenAI model",
+        "OpenAI model (personas)",
         options=["gpt-4o", "gpt-4o-mini", "gpt-4.1"],
         index=0,
     )
@@ -455,11 +834,20 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.markdown("### 🧪 Batch Controls")
+    st.markdown("### Long Copy Controls")
+    st.session_state.brief_model = st.selectbox(
+        "OpenAI model (brief extraction)",
+        options=["gpt-4o-mini", "gpt-4o", "gpt-4.1"],
+        index=0,
+    )
+    st.session_state.brief_temperature = st.slider("Brief temperature", 0.0, 1.0, 0.2, 0.1)
+
+    st.markdown("---")
+    st.markdown("### Batch Controls")
     st.session_state.max_batch = st.slider("Max personas per batch", 1, 25, 10, 1)
 
     st.markdown("---")
-    st.markdown("### 📄 Data")
+    st.markdown("### Data")
     if personas_path is None:
         st.error("No personas JSON found. Add a 'personas.json' next to this app.")
     else:
@@ -471,15 +859,15 @@ with st.sidebar:
         st.warning("Gemini not configured (missing GOOGLE_API_KEY).")
 
 
-# ────────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # MAIN UI
-# ────────────────────────────────────────────────────────────────────────────────
-st.title("🧠 The Foolish Synthetic Audience")
+# -----------------------------------------------------------------------------
+st.title("The Foolish Synthetic Audience")
 
 st.markdown(
     """
 <div style="background:#f0f2f6;padding:20px;border-left:6px solid #485cc7;border-radius:10px;margin-bottom:25px">
-    <h4 style="margin-top:0">ℹ️ About This Tool</h4>
+    <h4 style="margin-top:0">About This Tool</h4>
     <p>This tool uses a hybrid setup: <strong>OpenAI</strong> for persona simulation and <strong>Gemini</strong> (with OpenAI fallback) for strategic analysis.</p>
 </div>
 """,
@@ -492,14 +880,13 @@ if risk_flags:
     st.warning("Claim-risk flags detected: " + ", ".join(risk_flags))
 
 
-tab1, tab2 = st.tabs(["🗣️ Individual Interview", "⚔️ Focus Group Debate"])
+tab1, tab2 = st.tabs(["Individual Interview", "Focus Group Debate"])
 
 
 # ==============================================================================
 # TAB 1: INDIVIDUAL INTERVIEW
 # ==============================================================================
 with tab1:
-    # Segment filter
     segment_options = [
         {
             "segment_id": s.get("id") or slugify(s.get("label", "")),
@@ -518,15 +905,14 @@ with tab1:
     )
 
     if selected_segment_id == "All":
-        with st.expander("🔍 Segment Cheat Sheet"):
+        with st.expander("Segment Cheat Sheet"):
             for s in segment_options:
                 if s["summary"]:
                     st.markdown(f"**{s['segment_label']}**\n{s['summary']}\n")
     else:
-        # Show overview for the selected segment
         selected = next((s for s in segment_options if s["segment_id"] == selected_segment_id), None)
         if selected and selected.get("summary"):
-            with st.expander("🔍 Segment Overview", expanded=True):
+            with st.expander("Segment Overview", expanded=True):
                 st.write(selected["summary"])
 
     filtered_list = (
@@ -535,8 +921,7 @@ with tab1:
         else [p for p in all_personas_flat if p["segment_id"] == selected_segment_id]
     )
 
-    # Persona grid
-    st.markdown("### 👥 Select a Persona")
+    st.markdown("### Select a Persona")
     cols = st.columns(3)
 
     for i, entry in enumerate(filtered_list):
@@ -551,7 +936,6 @@ with tab1:
                     st.session_state.selected_persona_uid = entry["uid"]
                     st.rerun()
 
-    # Detailed profile
     selected_uid = st.session_state.get("selected_persona_uid")
     selected_entry = next((e for e in all_personas_flat if e["uid"] == selected_uid), None)
 
@@ -586,8 +970,7 @@ with tab1:
             unsafe_allow_html=True,
         )
 
-        # Suggested questions
-        st.markdown("### 💡 Suggested Questions")
+        st.markdown("### Suggested Questions")
         suggestions = _ensure_list(core.get("suggestions"))
         if suggestions:
             cols_s = st.columns(min(len(suggestions), 3))
@@ -598,8 +981,7 @@ with tab1:
         else:
             st.caption("No specific suggestions for this persona.")
 
-        # Q&A
-        st.markdown("### 💬 Interaction")
+        st.markdown("### Interaction")
         user_input = st.text_area("Enter your question:", value=st.session_state.question_input, key="q_input")
         ask_all = st.checkbox("Ask ALL visible personas (Batch Test)")
 
@@ -641,7 +1023,6 @@ with tab1:
                 st.session_state.question_input = ""
                 st.rerun()
 
-        # Display history
         if ask_all:
             st.markdown("#### Batch Results")
             for target in filtered_list[: int(st.session_state.max_batch)]:
@@ -670,38 +1051,147 @@ with tab1:
 # TAB 2: FOCUS GROUP DEBATE
 # ==============================================================================
 with tab2:
-    st.header("⚔️ Marketing Focus Group")
-    st.markdown("Pit two investors against each other to stress-test your copy.")
+    st.header("Marketing Focus Group")
+    st.markdown("Pit two investors against each other to stress-test your creative.")
 
     persona_options = {p["uid"]: p for p in all_personas_flat}
-    persona_labels = {uid: f"{p['core'].get('name','Unknown')} ({p['segment_label']})" for uid, p in persona_options.items()}
+    persona_labels = {
+        uid: f"{p['core'].get('name','Unknown')} ({p['segment_label']})" for uid, p in persona_options.items()
+    }
 
     c1, c2, c3 = st.columns(3)
     with c1:
         p1_uid = st.selectbox(
-            "Participant 1 (The Believer)",
+            "Participant 1 (Believer)",
             options=list(persona_options.keys()),
             format_func=lambda uid: persona_labels.get(uid, uid),
             index=0 if persona_options else 0,
         )
     with c2:
         p2_uid = st.selectbox(
-            "Participant 2 (The Skeptic)",
+            "Participant 2 (Skeptic)",
             options=list(persona_options.keys()),
             format_func=lambda uid: persona_labels.get(uid, uid),
             index=1 if len(persona_options) > 1 else 0,
         )
     with c3:
-        st.info("🔥 Mode: Adversarial Stress Test")
+        st.caption("Mode: Adversarial stress test")
 
-    marketing_topic = st.text_area("Marketing Headline / Copy", key="marketing_topic", height=150)
+    st.session_state.copy_type = st.selectbox(
+        "Copy type",
+        options=["Headline", "Email", "Sales Page", "Other"],
+        index=["Headline", "Email", "Sales Page", "Other"].index(st.session_state.copy_type)
+        if st.session_state.copy_type in ["Headline", "Email", "Sales Page", "Other"]
+        else 1,
+    )
 
-    if st.button("🚀 Start Focus Group", type="primary"):
+    with st.expander("Long copy settings (recommended for sales pages)", expanded=False):
+        st.session_state.strip_boilerplate = st.checkbox(
+            "Strip common email footer/boilerplate",
+            value=bool(st.session_state.strip_boilerplate),
+            help="Removes common unsubscribe/privacy/footer blocks to reduce noise.",
+        )
+
+        st.session_state.scope_mode = st.radio(
+            "Analysis scope for participants",
+            options=["Full text", "First N words", "Custom excerpt"],
+            index=["Full text", "First N words", "Custom excerpt"].index(st.session_state.scope_mode)
+            if st.session_state.scope_mode in ["Full text", "First N words", "Custom excerpt"]
+            else 0,
+            help="Controls what the Believer/Skeptic are shown. Moderator can still see a brief.",
+        )
+
+        if st.session_state.scope_mode == "First N words":
+            st.session_state.scope_words = st.slider("N words", 100, 2500, int(st.session_state.scope_words), 50)
+        elif st.session_state.scope_mode == "Custom excerpt":
+            st.session_state.custom_excerpt = st.text_area(
+                "Paste an excerpt to analyse (used instead of full text)",
+                value=st.session_state.custom_excerpt,
+                height=140,
+            )
+
+        st.session_state.use_brief = st.checkbox(
+            "Auto-extract a structured brief",
+            value=bool(st.session_state.use_brief),
+            help="Strongly recommended for long sales pages to keep prompts stable and outputs structured.",
+        )
+
+    height = 120 if st.session_state.copy_type == "Headline" else 220
+    if st.session_state.copy_type == "Sales Page":
+        height = 360
+
+    marketing_topic = st.text_area("Paste creative", key="marketing_topic", height=height)
+
+    # Live stats
+    raw_text = marketing_topic or ""
+    processed_text = raw_text
+    if st.session_state.strip_boilerplate and st.session_state.copy_type == "Email":
+        processed_text = strip_common_email_footer(processed_text)
+
+    stats_words = word_count(processed_text)
+    stats_tokens = estimate_tokens(processed_text)
+    st.caption(f"Input size: {stats_words} words (approx {stats_tokens} tokens)")
+
+    # Auto-suggest safe defaults for long copy
+    long_copy = stats_words >= 900 or stats_tokens >= 2400
+    if long_copy:
+        st.info(
+            "Long copy detected. Recommended: enable brief extraction and show participants a shorter excerpt (First N words)."
+        )
+    PARTICIPANT_MAX_WORDS = 1500
+
+    def compute_excerpt(text: str) -> Tuple[str, str]:
+        mode = st.session_state.scope_mode
+
+        if mode == "Custom excerpt":
+            custom = (st.session_state.custom_excerpt or "").strip()
+            if custom:
+                if word_count(custom) > PARTICIPANT_MAX_WORDS:
+                    return (
+                        truncate_to_words(custom, PARTICIPANT_MAX_WORDS),
+                        f"Custom excerpt (truncated to first {PARTICIPANT_MAX_WORDS} words)",
+                    )
+                return custom, "Custom excerpt"
+
+            # fall back to full text
+            if word_count(text) > PARTICIPANT_MAX_WORDS:
+                return (
+                    truncate_to_words(text, PARTICIPANT_MAX_WORDS),
+                    f"Full text (truncated to first {PARTICIPANT_MAX_WORDS} words)",
+                )
+            return text.strip(), "Full text"
+
+        if mode == "First N words":
+            n = min(int(st.session_state.scope_words), PARTICIPANT_MAX_WORDS)
+            return truncate_to_words(text, n), f"First {n} words"
+
+        # Full text
+        if word_count(text) > PARTICIPANT_MAX_WORDS:
+            return (
+                truncate_to_words(text, PARTICIPANT_MAX_WORDS),
+                f"Full text (truncated to first {PARTICIPANT_MAX_WORDS} words)",
+            )
+        return text.strip(), "Full text"
+
+    excerpt_text, scope_note = compute_excerpt(processed_text)
+
+    # Decide what to feed into the brief extractor
+    BRIEF_MAX_WORDS = 2500
+    brief_input_text = truncate_to_words(processed_text, BRIEF_MAX_WORDS)
+    brief_trunc_note = "Not truncated"
+    if word_count(processed_text) > BRIEF_MAX_WORDS:
+        brief_trunc_note = f"Brief built from first {BRIEF_MAX_WORDS} words (input was longer)."
+
+    if st.button("Start Focus Group", type="primary"):
         st.session_state.debate_history = []
         st.session_state.moderator_raw = ""
         st.session_state.moderator_json = None
         st.session_state.suggested_rewrite = ""
         st.session_state.campaign_assets = None
+
+        st.session_state.creative_processed = processed_text
+        st.session_state.creative_excerpt = excerpt_text
+        st.session_state.creative_scope_note = scope_note
 
         p_a = persona_options.get(p1_uid)
         p_b = persona_options.get(p2_uid)
@@ -710,6 +1200,26 @@ with tab2:
             st.error("Please select two participants.")
             st.stop()
 
+        # Extract brief if enabled or if long copy
+        st.session_state.creative_brief_raw = ""
+        st.session_state.creative_brief_json = None
+
+        should_extract_brief = bool(st.session_state.use_brief) or long_copy
+        brief_summary = ""
+
+        if should_extract_brief:
+            with st.spinner("Extracting structured brief..."):
+                brief_raw, brief_json = extract_creative_brief(
+                    text_for_brief=brief_input_text,
+                    copy_type=st.session_state.copy_type,
+                    truncation_note=brief_trunc_note,
+                )
+            st.session_state.creative_brief_raw = brief_raw
+            st.session_state.creative_brief_json = brief_json
+            if isinstance(brief_json, dict):
+                brief_summary = format_brief_summary(brief_json)
+
+        # Base instruction shared across roles
         base_instruction = (
             "IMPORTANT: This is a simulation for marketing research. "
             "You are roleplaying a specific persona. Do NOT sound like a generic AI. "
@@ -725,6 +1235,40 @@ with tab2:
             goals = "; ".join(_ensure_list(core.get("goals"))[:4])
             concerns = "; ".join(_ensure_list(core.get("concerns"))[:4])
 
+            style_block = ""
+            if st.session_state.copy_type == "Headline":
+                style_block = (
+                    "Respond in this structure:\n"
+                    "- Hook: ...\n"
+                    "- What I infer: ...\n"
+                    "- What I'd do next: ...\n"
+                )
+            elif st.session_state.copy_type == "Email":
+                style_block = (
+                    "Respond in this structure:\n"
+                    "- Open or ignore (and why): ...\n"
+                    "- Trust/credibility reaction: ...\n"
+                    "- Biggest question: ...\n"
+                    "- One change that improves it: ...\n"
+                )
+            elif st.session_state.copy_type == "Sales Page":
+                style_block = (
+                    "Respond in this structure:\n"
+                    "- Above-the-fold reaction: ...\n"
+                    "- Offer clarity: ...\n"
+                    "- Proof/trust: ...\n"
+                    "- Objection: ...\n"
+                    "- One fix: ...\n"
+                )
+            else:
+                style_block = (
+                    "Respond in this structure:\n"
+                    "- What works: ...\n"
+                    "- What worries me: ...\n"
+                    "- Proof I'd need: ...\n"
+                    "- One fix: ...\n"
+                )
+
             return (
                 f"ROLE: You are {core.get('name')}, a {core.get('age')}-year-old {core.get('occupation')}. "
                 f"BIO: {core.get('narrative','')}\n"
@@ -735,153 +1279,282 @@ with tab2:
                 f"CONTEXT: In this focus group, you represent '{stance}'.\n"
                 + (
                     "You WANT the marketing message to be true. You focus on upside, possibility, and emotional appeal. "
-                    "You defend the message against skepticism, but you still sound like a real person."
-                    if stance == "The Believer"
+                    "You defend the message against skepticism, but you still sound like a real person.\n"
+                    if stance == "Believer"
                     else "You are critical of marketing hype and naturally risk-aware. You look for missing details, credibility gaps, and implied claims. "
-                    "You call out anything that sounds too good to be true."
+                    "You call out anything that sounds too good to be true.\n"
                 )
+                + "\n" + style_block
             )
 
-        role_a = role_prompt(p_a, "The Believer")
-        role_b = role_prompt(p_b, "The Skeptic")
+        role_a = role_prompt(p_a, "Believer")
+        role_b = role_prompt(p_b, "Skeptic")
 
-        chat_container = st.container()
+        # Compose the creative context shown to participants
+        creative_context = (
+            f"COPY TYPE: {st.session_state.copy_type}\n"
+            f"SCOPE SHOWN TO YOU: {scope_note}\n\n"
+            "CREATIVE (what you saw):\n"
+            f"{excerpt_text}\n"
+        )
+        if brief_summary:
+            creative_context += "\nCREATIVE BRIEF (for context):\n" + brief_summary + "\n"
 
-        with chat_container:
-            st.markdown(f"**Topic:** *{marketing_topic}*")
-            st.divider()
+        st.markdown("---")
+        st.markdown("### What the personas saw")
+        with st.expander("Preview excerpt used in the debate", expanded=False):
+            st.code(excerpt_text)
+        if isinstance(st.session_state.creative_brief_json, dict):
+            with st.expander("Preview extracted brief JSON", expanded=False):
+                st.json(st.session_state.creative_brief_json)
+        elif should_extract_brief and st.session_state.creative_brief_raw:
+            with st.expander("Brief extraction output (raw)", expanded=False):
+                st.code(st.session_state.creative_brief_raw)
 
-            # 1) Believer
-            msg_a = query_openai(
-                [
-                    {"role": "system", "content": base_instruction + "\n\n" + role_a},
-                    {"role": "user", "content": f"React to this marketing text. What pulls you in? What do you *want* to believe?\n\nTEXT:\n{marketing_topic}"},
-                ],
-                model=st.session_state.openai_model,
-                temperature=float(st.session_state.openai_temperature),
-            )
-            st.session_state.debate_history.append({"name": p_a["core"].get("name"), "uid": p_a["uid"], "text": msg_a})
-            st.markdown(f"**{p_a['core'].get('name')} (The Believer)**: {msg_a}")
-            time.sleep(0.5)
+        st.markdown("---")
+        st.markdown("### Debate")
 
-            # 2) Skeptic
-            msg_b = query_openai(
-                [
-                    {"role": "system", "content": base_instruction + "\n\n" + role_b},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"The marketing text is below. {p_a['core'].get('name')} just said: '{msg_a}'. "
-                            "Give them a reality check. Be specific about what you'd need to see to trust it.\n\n"
-                            f"TEXT:\n{marketing_topic}"
-                        ),
-                    },
-                ],
-                model=st.session_state.openai_model,
-                temperature=float(st.session_state.openai_temperature),
-            )
-            st.session_state.debate_history.append({"name": p_b["core"].get("name"), "uid": p_b["uid"], "text": msg_b})
-            st.markdown(f"**{p_b['core'].get('name')} (The Skeptic)**: {msg_b}")
-            time.sleep(0.5)
+        # 1) Believer
+        msg_a = query_openai(
+            [
+                {"role": "system", "content": base_instruction + "\n\n" + role_a},
+                {
+                    "role": "user",
+                    "content": (
+                        "React to the creative. Be specific about what pulls you in, and what you want to believe.\n\n"
+                        + creative_context
+                    ),
+                },
+            ],
+            model=st.session_state.openai_model,
+            temperature=float(st.session_state.openai_temperature),
+        )
+        st.session_state.debate_history.append({"name": p_a["core"].get("name"), "uid": p_a["uid"], "text": msg_a})
+        st.markdown(f"**{p_a['core'].get('name')} (Believer)**: {msg_a}")
+        time.sleep(0.3)
 
-            # 3) Believer retort
-            msg_a2 = query_openai(
-                [
-                    {"role": "system", "content": base_instruction + "\n\n" + role_a},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"You just got critiqued. {p_b['core'].get('name')} said: '{msg_b}'. "
-                            "Respond as yourself. Acknowledge what feels fair, and restate what still excites you."
-                        ),
-                    },
-                ],
-                model=st.session_state.openai_model,
-                temperature=float(st.session_state.openai_temperature),
-            )
-            st.session_state.debate_history.append({"name": p_a["core"].get("name"), "uid": p_a["uid"], "text": msg_a2})
-            st.markdown(f"**{p_a['core'].get('name')} (The Believer)**: {msg_a2}")
+        # 2) Skeptic
+        msg_b = query_openai(
+            [
+                {"role": "system", "content": base_instruction + "\n\n" + role_b},
+                {
+                    "role": "user",
+                    "content": (
+                        f"The Believer ({p_a['core'].get('name')}) just said:\n{msg_a}\n\n"
+                        "Give them a reality check. Be specific about what you would need to see to trust it.\n\n"
+                        + creative_context
+                    ),
+                },
+            ],
+            model=st.session_state.openai_model,
+            temperature=float(st.session_state.openai_temperature),
+        )
+        st.session_state.debate_history.append({"name": p_b["core"].get("name"), "uid": p_b["uid"], "text": msg_b})
+        st.markdown(f"**{p_b['core'].get('name')} (Skeptic)**: {msg_b}")
+        time.sleep(0.3)
 
-            # 4) Moderator
-            st.divider()
-            st.subheader("📊 Strategic Analysis (Moderator)")
+        # 3) Believer retort
+        msg_a2 = query_openai(
+            [
+                {"role": "system", "content": base_instruction + "\n\n" + role_a},
+                {
+                    "role": "user",
+                    "content": (
+                        f"You just got critiqued. The Skeptic ({p_b['core'].get('name')}) said:\n{msg_b}\n\n"
+                        "Respond as yourself. Acknowledge what feels fair, and restate what still excites you.\n\n"
+                        "Keep it grounded in what you saw."
+                    ),
+                },
+            ],
+            model=st.session_state.openai_model,
+            temperature=float(st.session_state.openai_temperature),
+        )
+        st.session_state.debate_history.append({"name": p_a["core"].get("name"), "uid": p_a["uid"], "text": msg_a2})
+        st.markdown(f"**{p_a['core'].get('name')} (Believer)**: {msg_a2}")
 
-            transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
+        # 4) Moderator
+        st.markdown("---")
+        st.subheader("Strategic Analysis (Moderator)")
 
-            mod_prompt = f"""
+        transcript = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
+
+        # Moderator sees: transcript + brief (if present) + the same excerpt + (optional) the full copy
+        full_copy_included = processed_text
+        full_copy_note = "Full copy included."
+
+        # Hard guardrail for extremely long copy to reduce failures.
+        MOD_MAX_WORDS = 4500
+        if word_count(processed_text) > MOD_MAX_WORDS:
+            full_copy_included = truncate_to_words(processed_text, MOD_MAX_WORDS)
+            full_copy_note = f"Full copy was very long. Moderator only received first {MOD_MAX_WORDS} words."
+
+        brief_json_block = ""
+        if isinstance(st.session_state.creative_brief_json, dict):
+            brief_json_block = json.dumps(st.session_state.creative_brief_json, ensure_ascii=False)
+
+        mod_prompt = f"""
 You are a legendary Direct Response Copywriter (Motley Fool style) acting as a focus-group moderator.
 
-TRANSCRIPT:
+GOAL:
+Produce structured, actionable critique and a format-appropriate rewrite.
+
+COPY TYPE: {st.session_state.copy_type}
+SCOPE SHOWN TO PARTICIPANTS: {scope_note}
+FULL COPY NOTE: {full_copy_note}
+
+FOCUS GROUP TRANSCRIPT:
 {transcript}
 
-MARKETING COPY:
-{marketing_topic}
+CREATIVE EXCERPT SHOWN TO PARTICIPANTS:
+{excerpt_text}
+
+EXTRACTED CREATIVE BRIEF (JSON, if available):
+{brief_json_block}
+
+FULL CREATIVE (as available):
+{full_copy_included}
 
 OUTPUT:
-Return ONLY a single JSON object (no markdown, no commentary) with this structure:
+Return ONLY a single JSON object (no markdown, no commentary) with EXACTLY this shape (keys may be empty strings or empty lists, but must exist):
 
-{{
-  \"real_why\": \"...\",
-  \"trust_gap\": \"...\",
-  \"key_objections\": [\"...\"],
-  \"proof_needed\": [\"...\"],
-  \"risk_flags\": [\"...\"],
-  \"rewrite\": {{
-    \"subject\": \"...\",
-    \"body\": \"...\"
-  }},
-  \"notes\": \"...\"
-}}
+{moderator_schema_example(st.session_state.copy_type)}
 
-Constraints:
-- Subject <= 70 characters.
-- Body: 2-3 sentences, story-driven, personal, contrarian.
-- Neutralise the skeptic's objection without making guarantees.
-"""
+CONSTRAINTS:
+- Be specific and diagnostic.
+- Avoid guarantees or performance promises.
+- If the excerpt is missing crucial info, say exactly what is missing.
+- Make the rewrite fit the declared copy type.
+- Keep rewrite lengths reasonable:
+  - Headline: 8-12 headline options.
+  - Email: subject+preheader + body (150-250 words max) + CTA + optional PS.
+  - Sales Page: rewrite key blocks (hero headline/subhead, bullets, proof block, offer stack, CTA).
+""".strip()
 
-            with st.spinner("Moderator is analysing..."):
-                mod_raw = query_gemini(mod_prompt, model_name=st.session_state.gemini_model)
+        with st.spinner("Moderator is analysing..."):
+            mod_raw = query_gemini(mod_prompt, model_name=st.session_state.gemini_model)
 
-            st.session_state.moderator_raw = mod_raw
-            mj = extract_json_object(mod_raw)
-            st.session_state.moderator_json = mj
+        st.session_state.moderator_raw = mod_raw
+        mj = extract_json_object(mod_raw)
+        st.session_state.moderator_json = mj
 
-            if mj is None:
-                st.info(mod_raw)
-                st.warning("Moderator output wasn't valid JSON; displayed raw text.")
+        if mj is None:
+            st.info(mod_raw)
+            st.warning("Moderator output was not valid JSON; displayed raw text.")
+        else:
+            st.success("Moderator analysis ready.")
+
+            # Display structured fields if present
+            st.markdown(f"**Executive summary:** {mj.get('executive_summary','')}")
+            st.markdown(f"**Real why:** {mj.get('real_why','')}")
+            st.markdown(f"**Trust gap:** {mj.get('trust_gap','')}")
+
+            if mj.get("key_objections"):
+                st.markdown("**Key objections:**")
+                for x in _ensure_list(mj.get("key_objections")):
+                    st.markdown(f"- {x}")
+
+            if mj.get("proof_needed"):
+                st.markdown("**Proof needed:**")
+                for x in _ensure_list(mj.get("proof_needed")):
+                    st.markdown(f"- {x}")
+
+            if mj.get("confusing_phrases"):
+                st.markdown("**Confusing phrases:**")
+                for x in _ensure_list(mj.get("confusing_phrases")):
+                    st.markdown(f"- {x}")
+
+            if mj.get("risk_flags"):
+                st.markdown("**Risk flags:**")
+                for x in _ensure_list(mj.get("risk_flags")):
+                    st.markdown(f"- {x}")
+
+            if mj.get("actionable_fixes"):
+                st.markdown("**Actionable fixes:**")
+                for x in _ensure_list(mj.get("actionable_fixes")):
+                    st.markdown(f"- {x}")
+
+            if mj.get("section_feedback"):
+                with st.expander("Section-by-section feedback", expanded=False):
+                    for sf in _ensure_list(mj.get("section_feedback")):
+                        if not isinstance(sf, dict):
+                            continue
+                        st.markdown(f"**{sf.get('section','Section')}**")
+                        ww = sf.get("what_works", "")
+                        wf = sf.get("what_fails", "")
+                        fx = sf.get("fix", "")
+                        if ww:
+                            st.markdown(f"- What works: {ww}")
+                        if wf:
+                            st.markdown(f"- What fails: {wf}")
+                        if fx:
+                            st.markdown(f"- Fix: {fx}")
+                        st.markdown("---")
+
+            st.markdown("---")
+            st.markdown("### Rewrite")
+
+            rw = _ensure_dict(mj.get("rewrite"))
+            ct = mj.get("copy_type") or st.session_state.copy_type
+
+            if ct == "Headline":
+                heads = _ensure_list(rw.get("headlines"))
+                if heads:
+                    for i, h in enumerate(heads[:12], start=1):
+                        st.markdown(f"{i}. {h}")
+                supp = _ensure_list(rw.get("supporting_lines"))
+                if supp:
+                    st.markdown("**Supporting lines:**")
+                    for s in supp[:6]:
+                        st.markdown(f"- {s}")
+                if rw.get("angle_notes"):
+                    st.markdown(f"**Angle notes:** {rw.get('angle_notes')}")
+
+            elif ct == "Email":
+                if rw.get("subject"):
+                    st.markdown(f"**Subject:** {rw.get('subject')}")
+                if rw.get("preheader"):
+                    st.markdown(f"**Preheader:** {rw.get('preheader')}")
+                if rw.get("body"):
+                    st.markdown("**Body:**")
+                    st.write(str(rw.get("body")).strip())
+                if rw.get("cta"):
+                    st.markdown(f"**CTA:** {rw.get('cta')}")
+                if rw.get("ps"):
+                    st.markdown(f"**P.S.:** {rw.get('ps')}")
+
+            elif ct == "Sales Page":
+                if rw.get("hero_headline"):
+                    st.markdown(f"**Hero headline:** {rw.get('hero_headline')}")
+                if rw.get("hero_subheadline"):
+                    st.markdown(f"**Hero subheadline:** {rw.get('hero_subheadline')}")
+                bullets = _ensure_list(rw.get("bullets"))
+                if bullets:
+                    st.markdown("**Bullets:**")
+                    for b in bullets[:10]:
+                        st.markdown(f"- {b}")
+                if rw.get("proof_block"):
+                    st.markdown("**Proof block:**")
+                    st.write(str(rw.get("proof_block")).strip())
+                offer_stack = _ensure_list(rw.get("offer_stack"))
+                if offer_stack:
+                    st.markdown("**Offer stack:**")
+                    for o in offer_stack[:10]:
+                        st.markdown(f"- {o}")
+                if rw.get("cta_button") or rw.get("cta_line"):
+                    st.markdown("**CTA:**")
+                    if rw.get("cta_button"):
+                        st.markdown(f"- Button: {rw.get('cta_button')}")
+                    if rw.get("cta_line"):
+                        st.markdown(f"- Line: {rw.get('cta_line')}")
+
             else:
-                st.success("Moderator analysis ready.")
+                if rw.get("headline"):
+                    st.markdown(f"**Headline:** {rw.get('headline')}")
+                if rw.get("body"):
+                    st.markdown("**Body:**")
+                    st.write(str(rw.get("body")).strip())
 
-                st.markdown(f"**Real why:** {mj.get('real_why','')}")
-                st.markdown(f"**Trust gap:** {mj.get('trust_gap','')}")
-
-                if mj.get("key_objections"):
-                    st.markdown("**Key objections:**")
-                    for x in mj.get("key_objections"):
-                        st.markdown(f"- {x}")
-
-                if mj.get("proof_needed"):
-                    st.markdown("**Proof needed:**")
-                    for x in mj.get("proof_needed"):
-                        st.markdown(f"- {x}")
-
-                if mj.get("risk_flags"):
-                    st.markdown("**Risk flags:**")
-                    for x in mj.get("risk_flags"):
-                        st.markdown(f"- {x}")
-
-                rewrite = mj.get("rewrite") or {}
-                subject = rewrite.get("subject")
-                body = rewrite.get("body")
-
-                st.markdown("---")
-                st.markdown("### ✍️ Rewrite")
-                if subject:
-                    st.markdown(f"**Subject:** {subject}")
-                if body:
-                    st.markdown(f"**Body:** {body}")
-
-                st.session_state.suggested_rewrite = json.dumps(mj, ensure_ascii=False, indent=2)
+            st.session_state.suggested_rewrite = json.dumps(mj, ensure_ascii=False, indent=2)
 
     # Feedback loop & campaign generator
     if st.session_state.debate_history and (st.session_state.moderator_raw or st.session_state.moderator_json):
@@ -889,15 +1562,15 @@ Constraints:
         col_a, col_b = st.columns([1, 2])
 
         with col_a:
-            st.markdown("### 🔄 Iterate")
+            st.markdown("### Iterate")
             st.caption("Re-run debate with the rewrite applied.")
             st.button("Test Rewrite", on_click=apply_rewrite_from_moderator)
 
         with col_b:
-            st.markdown("### 📢 Production")
+            st.markdown("### Production")
             st.caption("Turn the insight into ad assets.")
 
-            if st.button("✨ Generate Campaign Assets", type="secondary"):
+            if st.button("Generate Campaign Assets", type="secondary"):
                 with st.spinner("Briefing the specialist copywriters..."):
                     insight = st.session_state.moderator_json or {"raw": st.session_state.moderator_raw}
 
@@ -924,19 +1597,19 @@ TASKS:
 
 Output as Markdown with headers: ### Google Ads, ### Meta Ad, ### Sales Page Hero
 Avoid guarantees or performance promises.
-"""
+""".strip()
 
                     assets = query_gemini(campaign_prompt, model_name=st.session_state.gemini_model)
                     st.session_state.campaign_assets = assets
 
         if st.session_state.campaign_assets:
             st.divider()
-            st.subheader("📦 Campaign Asset Pack")
+            st.subheader("Campaign Asset Pack")
             st.markdown(st.session_state.campaign_assets)
 
         # Export
         st.divider()
-        st.subheader("⬇️ Export")
+        st.subheader("Export")
 
         transcript_txt = "\n".join([f"{x['name']}: {x['text']}" for x in st.session_state.debate_history])
         st.download_button(
@@ -945,6 +1618,14 @@ Avoid guarantees or performance promises.
             file_name="focus_group_transcript.txt",
             mime="text/plain",
         )
+
+        if isinstance(st.session_state.creative_brief_json, dict):
+            st.download_button(
+                "Download creative brief (json)",
+                data=json.dumps(st.session_state.creative_brief_json, ensure_ascii=False, indent=2),
+                file_name="creative_brief.json",
+                mime="application/json",
+            )
 
         if st.session_state.moderator_json:
             st.download_button(
